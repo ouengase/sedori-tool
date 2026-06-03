@@ -1,0 +1,1798 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>せどり管理ツール</title>
+<link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@400;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script type="module">
+  import { initializeApp }
+    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getDatabase, ref, set, get, remove }
+    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+  import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
+    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyA-qQTbe2m7m5IkzlBvtkrDEO-Wt4suhFQ",
+    authDomain: "sedori-tool-yn.firebaseapp.com",
+    databaseURL: "https://sedori-tool-yn-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "sedori-tool-yn",
+    storageBucket: "sedori-tool-yn.firebasestorage.app",
+    messagingSenderId: "713057655344",
+    appId: "1:713057655344:web:20dc2f29bc6ed6d1062bf5"
+  };
+
+  const app      = initializeApp(firebaseConfig);
+  const db       = getDatabase(app);
+  const auth     = getAuth(app);
+  const provider = new GoogleAuthProvider();
+
+  // ── 低レベルhelper ─────────────────────────────────
+  async function fbGet(path) {
+    const snap = await get(ref(db, path));
+    return snap.exists() ? snap.val() : null;
+  }
+  async function fbSet(path, val) { await set(ref(db, path), val); }
+  async function fbDel(path)      { await remove(ref(db, path)); }
+
+  // ── sedori_list API ───────────────────────────────
+  window.getList = async function() {
+    const val = await fbGet("sedori_list");
+    if (!val) return [];
+    return Object.values(val).sort((a,b) => a.id - b.id);
+  };
+  window.addItem    = async (item) => fbSet("sedori_list/" + item.id, item);
+  window.updateItem = async (item) => fbSet("sedori_list/" + item.id, item);
+  window.removeItem = async (id)   => fbDel("sedori_list/" + id);
+
+  // ── sedori_searches API ───────────────────────────
+  window.getSearchHistory = async function() {
+    const val = await fbGet("sedori_searches");
+    if (!val) return [];
+    return Object.values(val).sort((a,b) => b.id - a.id);
+  };
+  window.addSearch    = async (e) => fbSet("sedori_searches/" + e.id, e);
+  window.updateSearch = async (e) => fbSet("sedori_searches/" + e.id, e);
+  window.removeSearch = async (id) => fbDel("sedori_searches/" + id);
+
+  // ── Google ログイン ───────────────────────────────
+  window.doLogin = async function() {
+    try {
+      await signInWithPopup(auth, provider);
+    } catch(e) {
+      alert("ログインに失敗しました: " + e.message);
+    }
+  };
+  window.doLogout = async function() {
+    await signOut(auth);
+  };
+
+  // ── 認証状態の監視 → 画面制御 ────────────────────
+  onAuthStateChanged(auth, (user) => {
+    const overlay  = document.getElementById("loadingOverlay");
+    const loginScr = document.getElementById("loginScreen");
+    const appWrap  = document.getElementById("appWrapper");
+
+    if (user) {
+      // ログイン済み
+      document.getElementById("userAvatar").src  = user.photoURL || "";
+      document.getElementById("userName").textContent = user.displayName || user.email;
+      loginScr.style.display = "none";
+      appWrap.style.display  = "block";
+      overlay.style.display  = "none";
+      buildPresets();
+      calc();
+    } else {
+      // 未ログイン
+      loginScr.style.display = "flex";
+      appWrap.style.display  = "none";
+      overlay.style.display  = "none";
+    }
+  });
+</script>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #22263a;
+    --border: #2e3350;
+    --accent: #f5a623;
+    --accent2: #e05c2a;
+    --green: #3ddc84;
+    --red: #ff4f4f;
+    --blue: #4fa8e8;
+    --text: #e8eaf0;
+    --muted: #6b7094;
+    --label: #9ba3c4;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Noto Sans JP', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  header {
+    background: var(--surface);
+    border-bottom: 2px solid var(--accent);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .logo {
+    font-family: 'Oxanium', monospace;
+    font-size: 1.3rem;
+    font-weight: 700;
+    letter-spacing: .1em;
+    color: var(--accent);
+  }
+  .logo span { color: var(--text); }
+  .tagline {
+    font-size: .72rem;
+    color: var(--muted);
+    letter-spacing: .08em;
+    margin-top: 2px;
+  }
+
+  /* ── Nav Tabs ── */
+  nav {
+    background: var(--surface);
+    display: flex;
+    gap: 2px;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .tab-btn {
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: .78rem;
+    font-weight: 700;
+    letter-spacing: .06em;
+    padding: 11px 20px;
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    transition: color .2s, border-color .2s;
+    white-space: nowrap;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-btn.disabled { opacity: .35; cursor: default; pointer-events: none; }
+
+  /* ── Tab Panels ── */
+  .tab-panel { display: none; padding: 28px 24px; max-width: 900px; margin: 0 auto; }
+  .tab-panel.active { display: block; }
+
+  /* ── Section Title ── */
+  .section-title {
+    font-family: 'Oxanium', monospace;
+    font-size: .7rem;
+    letter-spacing: .18em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .section-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+  /* ── Card ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 22px 24px;
+    margin-bottom: 18px;
+  }
+
+  /* ── Platform Preset ── */
+  .preset-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+  .preset-btn {
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: .72rem;
+    font-weight: 700;
+    padding: 6px 14px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--label);
+    cursor: pointer;
+    transition: all .18s;
+    letter-spacing: .04em;
+  }
+  .preset-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .preset-btn.active { background: var(--accent); color: #111; border-color: var(--accent); }
+
+  /* ── Input Grid ── */
+  .input-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px; }
+  @media (max-width: 520px) { .input-grid { grid-template-columns: 1fr; } }
+
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field label { font-size: .72rem; color: var(--label); letter-spacing: .06em; font-weight: 500; }
+  .field .hint { font-size: .65rem; color: var(--muted); margin-top: -4px; }
+
+  .input-wrap { position: relative; }
+  .input-wrap .unit {
+    position: absolute; right: 12px; top: 50%; transform: translateY(-50%);
+    color: var(--muted); font-size: .78rem; pointer-events: none;
+  }
+  input[type=number], input[type=text], input[type=date], select, textarea {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: .9rem;
+    padding: 9px 12px;
+    outline: none;
+    transition: border-color .18s;
+    -moz-appearance: textfield;
+  }
+  input[type=number] { padding-right: 38px; }
+  input[type=number]::-webkit-outer-spin-button,
+  input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 72px; line-height: 1.6; }
+  select { cursor: pointer; }
+
+  /* ── Result ── */
+  .result-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 20px 24px;
+    margin-bottom: 18px;
+  }
+  .result-label {
+    font-family: 'Oxanium', monospace;
+    font-size: .68rem;
+    letter-spacing: .14em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  .result-value {
+    font-family: 'Oxanium', monospace;
+    font-size: 2.6rem;
+    font-weight: 700;
+    line-height: 1;
+    transition: color .3s;
+  }
+  .result-value.positive { color: var(--green); }
+  .result-value.negative { color: var(--red); }
+  .result-value.zero { color: var(--muted); }
+
+  .result-sub { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  @media (max-width: 520px) { .result-sub { grid-template-columns: 1fr 1fr; } }
+
+  .sub-item { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; }
+  .sub-item .s-label { font-size: .65rem; color: var(--muted); letter-spacing: .06em; margin-bottom: 4px; }
+  .sub-item .s-val { font-family: 'Oxanium', monospace; font-size: .95rem; font-weight: 600; color: var(--text); }
+  .sub-item .s-val.warn { color: var(--accent2); }
+
+  .roi-bar-wrap { margin-top: 14px; }
+  .roi-bar-label { display: flex; justify-content: space-between; font-size: .68rem; color: var(--muted); margin-bottom: 5px; }
+  .roi-bar-track { width: 100%; height: 6px; background: var(--bg); border-radius: 3px; overflow: hidden; }
+  .roi-bar-fill { height: 100%; border-radius: 3px; transition: width .4s ease, background .3s; background: var(--green); }
+
+  /* ── Buttons ── */
+  .btn-primary {
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: .82rem; font-weight: 700; letter-spacing: .06em;
+    padding: 11px 28px; border-radius: 4px; border: none;
+    background: var(--accent); color: #111; cursor: pointer; transition: opacity .18s;
+  }
+  .btn-primary:hover { opacity: .85; }
+  .btn-ghost {
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: .82rem; font-weight: 700; letter-spacing: .06em;
+    padding: 11px 22px; border-radius: 4px;
+    border: 1px solid var(--border); background: transparent; color: var(--label);
+    cursor: pointer; transition: all .18s;
+  }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-danger {
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: .78rem; font-weight: 700;
+    padding: 7px 14px; border-radius: 4px;
+    border: 1px solid var(--red); background: transparent; color: var(--red);
+    cursor: pointer; transition: all .18s;
+  }
+  .btn-danger:hover { background: var(--red); color: #fff; }
+  .btn-sm {
+    font-size: .72rem; padding: 5px 12px;
+  }
+
+  .action-row { display: flex; gap: 12px; flex-wrap: wrap; }
+
+  /* ── Toast ── */
+  #toast {
+    position: fixed; bottom: 28px; right: 28px;
+    background: var(--green); color: #0a1a12;
+    font-size: .82rem; font-weight: 700;
+    padding: 12px 22px; border-radius: 6px;
+    opacity: 0; pointer-events: none;
+    transform: translateY(12px);
+    transition: opacity .25s, transform .25s;
+    z-index: 999;
+  }
+  #toast.show { opacity: 1; transform: translateY(0); }
+
+  /* ─────────── TAB 2: LIST STYLES ─────────── */
+
+  /* Filter / Sort Bar */
+  .list-toolbar {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+  .list-toolbar input[type=text] {
+    flex: 1;
+    min-width: 160px;
+    font-size: .82rem;
+    padding: 8px 12px;
+  }
+  .list-toolbar select {
+    font-size: .78rem;
+    padding: 8px 10px;
+    width: auto;
+  }
+  .list-count {
+    font-family: 'Oxanium', monospace;
+    font-size: .72rem;
+    color: var(--muted);
+    letter-spacing: .08em;
+    margin-left: auto;
+  }
+
+  /* Status select (inline in card header) */
+  .status-select {
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: .65rem;
+    font-weight: 700;
+    letter-spacing: .05em;
+    padding: 3px 22px 3px 8px;
+    border-radius: 20px;
+    white-space: nowrap;
+    cursor: pointer;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath fill='%236b7094' d='M0 0l4 5 4-5z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 7px center;
+    transition: opacity .18s;
+  }
+  .status-select:hover { opacity: .8; }
+  .status-select.status-purchased { background-color: #1a2a4a; color: var(--blue);  border: 1px solid #2a4a7a; }
+  .status-select.status-listed    { background-color: #2a2010; color: var(--accent); border: 1px solid #5a4010; }
+  .status-select.status-sold      { background-color: #0f2a1a; color: var(--green);  border: 1px solid #1a5a2a; }
+  .status-select.status-returned  { background-color: #2a1010; color: var(--red);    border: 1px solid #5a2020; }
+  .status-select option { background: #1a1d27; color: var(--text); font-size: .82rem; }
+
+  /* Product card */
+  .product-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 12px;
+    overflow: hidden;
+    transition: border-color .18s;
+  }
+  .product-card:hover { border-color: #3e4570; }
+  .product-card.expanded { border-color: var(--accent); }
+
+  .pc-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .pc-chevron {
+    font-size: .7rem;
+    color: var(--muted);
+    transition: transform .2s;
+    flex-shrink: 0;
+  }
+  .product-card.expanded .pc-chevron { transform: rotate(90deg); }
+
+  .pc-name {
+    font-size: .92rem;
+    font-weight: 700;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pc-name.unnamed { color: var(--muted); font-style: italic; font-weight: 400; }
+
+  .pc-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .pc-profit {
+    font-family: 'Oxanium', monospace;
+    font-size: .88rem;
+    font-weight: 700;
+  }
+  .pc-profit.pos { color: var(--green); }
+  .pc-profit.neg { color: var(--red); }
+
+  /* Expanded body */
+  .pc-body {
+    display: none;
+    border-top: 1px solid var(--border);
+    padding: 18px 16px;
+  }
+  .product-card.expanded .pc-body { display: block; }
+
+  /* Edit form inside card */
+  .edit-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 18px;
+    margin-bottom: 16px;
+  }
+  @media (max-width: 560px) { .edit-grid { grid-template-columns: 1fr; } }
+  .edit-grid .field.full { grid-column: 1 / -1; }
+
+  /* Numbers summary row */
+  .num-summary {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+  }
+  .ns-item { flex: 1; min-width: 80px; }
+  .ns-label { font-size: .62rem; color: var(--muted); margin-bottom: 2px; }
+  .ns-val { font-family: 'Oxanium', monospace; font-size: .82rem; font-weight: 600; }
+
+  .pc-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* Empty state */
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--muted);
+  }
+  .empty-state .e-icon { font-size: 2.4rem; margin-bottom: 12px; }
+  .empty-state h3 {
+    font-family: 'Oxanium', monospace;
+    letter-spacing: .1em;
+    margin-bottom: 8px;
+    color: var(--label);
+  }
+  .empty-state p { font-size: .82rem; line-height: 1.6; }
+
+  /* ── Dashboard ── */
+  .kpi-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px 18px;
+    border-top: 3px solid var(--border);
+  }
+  .kpi-card.accent  { border-top-color: var(--accent); }
+  .kpi-card.green   { border-top-color: var(--green); }
+  .kpi-card.red     { border-top-color: var(--red); }
+  .kpi-card.blue    { border-top-color: var(--blue); }
+  .kpi-label { font-size: .65rem; color: var(--muted); letter-spacing: .1em; margin-bottom: 6px; }
+  .kpi-value { font-family: 'Oxanium', monospace; font-size: 1.5rem; font-weight: 700; line-height: 1; }
+  .kpi-sub   { font-size: .68rem; color: var(--muted); margin-top: 5px; }
+
+  /* Ranking table */
+  .rank-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 11px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: .82rem;
+  }
+  .rank-row:last-child { border-bottom: none; }
+  .rank-num { font-family: 'Oxanium', monospace; font-size: .78rem; font-weight: 700; color: var(--muted); width: 22px; flex-shrink: 0; }
+  .rank-num.gold   { color: #f5c842; }
+  .rank-num.silver { color: #b0b8c8; }
+  .rank-num.bronze { color: #cd7f3a; }
+  .rank-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rank-plat { font-size: .65rem; color: var(--muted); flex-shrink: 0; }
+  .rank-profit { font-family: 'Oxanium', monospace; font-size: .88rem; font-weight: 700; flex-shrink: 0; }
+  .rank-profit.pos { color: var(--green); }
+  .rank-profit.neg { color: var(--red); }
+
+  /* ── Modal ── */
+  .modal-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.7);
+    z-index: 900;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 28px;
+    max-width: 480px;
+    width: 100%;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+  .modal h3 {
+    font-family: 'Oxanium', monospace;
+    letter-spacing: .1em;
+    margin-bottom: 20px;
+    color: var(--accent);
+  }
+  .modal .action-row { margin-top: 20px; }
+
+  /* Loading overlay */
+  #loadingOverlay {
+    position: fixed; inset: 0; z-index: 9999;
+    background: #0f1117;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 16px;
+  }
+  .loading-spinner {
+    width: 36px; height: 36px;
+    border: 3px solid #2e3350;
+    border-top-color: #f5a623;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-text {
+    font-family: "Oxanium", monospace;
+    font-size: .78rem;
+    letter-spacing: .14em;
+    color: #6b7094;
+  }
+
+  /* ── Login screen ── */
+  #loginScreen {
+    position: fixed; inset: 0; z-index: 9998;
+    background: #0f1117;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 24px;
+    padding: 32px;
+  }
+  .login-logo {
+    font-family: "Oxanium", monospace;
+    font-size: 2rem; font-weight: 700;
+    letter-spacing: .12em;
+    color: #f5a623;
+  }
+  .login-logo span { color: #e8eaf0; }
+  .login-tagline {
+    font-size: .78rem; color: #6b7094;
+    letter-spacing: .1em; margin-top: -16px;
+  }
+  .login-card {
+    background: #1a1d27;
+    border: 1px solid #2e3350;
+    border-radius: 10px;
+    padding: 32px 36px;
+    text-align: center;
+    max-width: 340px; width: 100%;
+  }
+  .login-card p {
+    font-size: .82rem; color: #9ba3c4;
+    line-height: 1.7; margin-bottom: 24px;
+  }
+  .btn-google {
+    display: flex; align-items: center; justify-content: center;
+    gap: 10px; width: 100%;
+    background: #fff; color: #333;
+    font-family: "Noto Sans JP", sans-serif;
+    font-size: .88rem; font-weight: 700;
+    padding: 12px 20px; border-radius: 6px;
+    border: none; cursor: pointer;
+    transition: opacity .18s; letter-spacing: .04em;
+  }
+  .btn-google:hover { opacity: .88; }
+  .btn-google img { width: 20px; height: 20px; }
+
+  /* ── User info in header ── */
+  .user-info {
+    display: flex; align-items: center; gap: 10px;
+    margin-left: auto;
+  }
+  .user-avatar {
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    border: 2px solid #2e3350;
+    object-fit: cover;
+  }
+  .user-name {
+    font-size: .72rem; color: #9ba3c4;
+    max-width: 120px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .btn-logout {
+    font-family: "Noto Sans JP", sans-serif;
+    font-size: .68rem; font-weight: 700;
+    padding: 4px 10px; border-radius: 4px;
+    border: 1px solid #2e3350;
+    background: transparent; color: #6b7094;
+    cursor: pointer; transition: all .18s;
+  }
+  .btn-logout:hover { border-color: #ff4f4f; color: #ff4f4f; }
+</style>
+</head>
+<body>
+
+<div id="loadingOverlay">
+  <div class="loading-spinner"></div>
+  <div class="loading-text">CONNECTING TO DATABASE...</div>
+</div>
+
+<!-- ログイン画面 -->
+<div id="loginScreen" style="display:none;">
+  <div class="login-logo">SEDORI<span>TOOL</span></div>
+  <div class="login-tagline">せどり管理ツール</div>
+  <div class="login-card">
+    <p>このツールはGoogleアカウントでのログインが必要です。<br>あなただけのデータが安全に保存されます。</p>
+    <button class="btn-google" onclick="doLogin()">
+      <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google">
+      Googleでログイン
+    </button>
+  </div>
+</div>
+
+<!-- アプリ本体 -->
+<div id="appWrapper" style="display:none;">
+<header>
+  <div>
+    <div class="logo">SEDORI<span>TOOL</span></div>
+    <div class="tagline">せどり管理ツール v0.6</div>
+  </div>
+  <div class="user-info">
+    <img class="user-avatar" id="userAvatar" src="" alt="">
+    <span class="user-name" id="userName"></span>
+    <button class="btn-logout" onclick="doLogout()">ログアウト</button>
+  </div>
+</header>
+
+<nav>
+  <button class="tab-btn active" onclick="switchTab('calc',this)">💰 利益計算</button>
+  <button class="tab-btn" onclick="switchTab('list',this)">📦 商品リスト</button>
+  <button class="tab-btn" onclick="switchTab('search',this)">🔍 相場検索</button>
+  <button class="tab-btn" onclick="switchTab('dash',this)">📊 ダッシュボード</button>
+</nav>
+
+<!-- ═══════════════════ TAB 1: 利益計算 ═══════════════════ -->
+<div id="tab-calc" class="tab-panel active">
+
+  <div class="section-title">プラットフォームプリセット</div>
+  <div class="card" style="padding:16px 20px;">
+    <div class="preset-row" id="presetRow"></div>
+    <div style="display:flex;gap:10px;align-items:flex-end;">
+      <div class="field" style="flex:1;">
+        <label>手数料率 (%)</label>
+        <div class="input-wrap">
+          <input type="number" id="feeRate" value="10" min="0" max="100" step="0.1" oninput="calc()">
+          <span class="unit">%</span>
+        </div>
+      </div>
+      <div class="field" style="flex:1;">
+        <label>固定手数料 (円)</label>
+        <div class="input-wrap">
+          <input type="number" id="feeFixed" value="0" min="0" oninput="calc()">
+          <span class="unit">円</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">価格・コスト入力</div>
+  <div class="card">
+    <div class="input-grid">
+      <div class="field">
+        <label>仕入れ値（原価）</label>
+        <div class="input-wrap">
+          <input type="number" id="cost" placeholder="0" min="0" oninput="calc()">
+          <span class="unit">円</span>
+        </div>
+      </div>
+      <div class="field">
+        <label>売値（販売価格）</label>
+        <div class="input-wrap">
+          <input type="number" id="price" placeholder="0" min="0" oninput="calc()">
+          <span class="unit">円</span>
+        </div>
+      </div>
+      <div class="field">
+        <label>送料（発送コスト）</label>
+        <div class="input-wrap">
+          <input type="number" id="shipping" placeholder="0" min="0" oninput="calc()">
+          <span class="unit">円</span>
+        </div>
+      </div>
+      <div class="field">
+        <label>その他コスト</label>
+        <div class="input-wrap">
+          <input type="number" id="misc" placeholder="0" min="0" oninput="calc()">
+          <span class="unit">円</span>
+        </div>
+        <div class="hint">クリーニング代・消耗品など</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">計算結果</div>
+  <div class="result-card">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+      <div>
+        <div class="result-label">純利益</div>
+        <div class="result-value zero" id="resultProfit">—</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="result-label">利益率</div>
+        <div style="font-family:'Oxanium',monospace;font-size:1.6rem;font-weight:700;color:var(--muted)" id="resultMargin">—</div>
+      </div>
+    </div>
+    <div class="result-sub">
+      <div class="sub-item"><div class="s-label">売上</div><div class="s-val" id="subPrice">¥0</div></div>
+      <div class="sub-item"><div class="s-label">手数料</div><div class="s-val warn" id="subFee">¥0</div></div>
+      <div class="sub-item"><div class="s-label">総コスト</div><div class="s-val warn" id="subTotal">¥0</div></div>
+    </div>
+    <div class="roi-bar-wrap">
+      <div class="roi-bar-label"><span>ROI</span><span id="roiLabel">—</span></div>
+      <div class="roi-bar-track"><div class="roi-bar-fill" id="roiBar" style="width:0%"></div></div>
+    </div>
+  </div>
+
+  <div class="action-row">
+    <button class="btn-primary" onclick="openSaveModal()">📦 リストに保存</button>
+    <button class="btn-ghost" onclick="resetCalc()">リセット</button>
+  </div>
+
+</div>
+
+<!-- ═══════════════════ TAB 2: 商品リスト ═══════════════════ -->
+<div id="tab-list" class="tab-panel">
+
+  <div class="list-toolbar">
+    <input type="text" id="listSearch" placeholder="🔍 商品名・店舗で検索..." oninput="renderList()">
+    <select id="listFilterStatus" onchange="renderList()">
+      <option value="">すべてのステータス</option>
+      <option value="purchased">仕入済</option>
+      <option value="listed">出品中</option>
+      <option value="sold">売却済</option>
+      <option value="returned">返品</option>
+    </select>
+    <select id="listSort" onchange="renderList()">
+      <option value="newest">新しい順</option>
+      <option value="oldest">古い順</option>
+      <option value="profit_desc">利益 高い順</option>
+      <option value="profit_asc">利益 低い順</option>
+    </select>
+    <span class="list-count" id="listCount"></span>
+  </div>
+
+  <div id="listContainer"></div>
+</div>
+
+<!-- ═══════════════════ TAB 3: 相場検索 ═══════════════════ -->
+<div id="tab-search" class="tab-panel">
+
+  <div class="section-title">商品名で相場を検索</div>
+  <div class="card" style="padding:16px 20px;">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <div class="input-wrap" style="flex:1;min-width:200px;">
+        <input type="text" id="searchQuery" placeholder="例: ニンテンドースイッチ 本体" style="padding:10px 12px;"
+          onkeydown="if(event.key==='Enter')doSearch()">
+      </div>
+      <button class="btn-primary" onclick="doSearch()">🔍 検索</button>
+      <button class="btn-ghost" onclick="clearSearch()">クリア</button>
+    </div>
+    <!-- リストから引用 -->
+    <div style="margin-top:12px;">
+      <div style="font-size:.68rem;color:var(--muted);letter-spacing:.08em;margin-bottom:8px;">📦 リストから選択して検索：</div>
+      <div id="searchFromList" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+    </div>
+  </div>
+
+  <!-- 検索結果リンク -->
+  <div id="searchResultsArea" style="display:none;">
+    <div class="section-title">検索リンク</div>
+    <div id="searchLinks" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px;margin-bottom:20px;"></div>
+
+    <!-- 相場メモ -->
+    <div class="section-title">相場メモ</div>
+    <div class="card" style="padding:16px 20px;">
+      <div style="font-size:.72rem;color:var(--label);margin-bottom:10px;">調べた相場・気づきを残しておく</div>
+      <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
+        <textarea id="searchMemoInput" placeholder="例: メルカリ 中古 8,000〜10,000円 付属品ありは高め" style="flex:1;min-width:180px;min-height:60px;font-size:.82rem;"></textarea>
+        <button class="btn-primary" style="align-self:flex-end;" onclick="saveSearchMemo()">メモ保存</button>
+      </div>
+      <div id="searchMemoList" style="margin-top:14px;"></div>
+    </div>
+
+    <!-- リストと紐付け -->
+    <div class="section-title">商品リストに紐付け</div>
+    <div class="card" style="padding:16px 20px;">
+      <div style="font-size:.72rem;color:var(--label);margin-bottom:10px;">この検索結果を商品リストのアイテムに関連づける</div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <select id="linkTarget" style="flex:1;min-width:180px;font-size:.82rem;padding:8px 10px;">
+          <option value="">— 商品を選択 —</option>
+        </select>
+        <button class="btn-ghost" onclick="linkToItem()">紐付ける</button>
+      </div>
+      <div id="linkedItems" style="margin-top:12px;"></div>
+    </div>
+  </div>
+
+  <!-- 紐付き検索履歴 -->
+  <div class="section-title" style="margin-top:4px;">検索履歴</div>
+  <div id="searchHistory"></div>
+</div>
+
+<!-- ═══════════════════ TAB 4: ダッシュボード ═══════════════════ -->
+<div id="tab-dash" class="tab-panel">
+
+  <!-- 期間フィルター -->
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:20px;">
+    <div style="display:flex;gap:6px;">
+      <button class="preset-btn active" id="range-all"   onclick="setRange('all',this)">全期間</button>
+      <button class="preset-btn"        id="range-year"  onclick="setRange('year',this)">今年</button>
+      <button class="preset-btn"        id="range-month" onclick="setRange('month',this)">今月</button>
+    </div>
+    <span id="dashRangeLabel" style="font-size:.72rem;color:var(--muted);margin-left:4px;"></span>
+  </div>
+
+  <!-- KPIカード行 -->
+  <div id="kpiRow" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:24px;"></div>
+
+  <!-- 月別利益グラフ -->
+  <div class="section-title">月別利益</div>
+  <div class="card" style="padding:18px 20px 14px;">
+    <canvas id="monthlyChart" height="180"></canvas>
+    <div id="monthlyEmpty" style="display:none;text-align:center;padding:30px 0;color:var(--muted);font-size:.82rem;">データがありません</div>
+  </div>
+
+  <!-- プラットフォーム別 -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+    <div>
+      <div class="section-title">プラットフォーム別</div>
+      <div class="card" style="padding:16px 18px;">
+        <canvas id="platformChart" height="180"></canvas>
+        <div id="platformEmpty" style="display:none;text-align:center;padding:20px 0;color:var(--muted);font-size:.82rem;">データなし</div>
+      </div>
+    </div>
+    <div>
+      <div class="section-title">ステータス別 件数</div>
+      <div class="card" style="padding:16px 18px;">
+        <canvas id="statusChart" height="180"></canvas>
+        <div id="statusEmpty" style="display:none;text-align:center;padding:20px 0;color:var(--muted);font-size:.82rem;">データなし</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 商品ランキング -->
+  <div class="section-title">利益ランキング（売却済）</div>
+  <div class="card" style="padding:0;overflow:hidden;">
+    <div id="rankingTable"></div>
+  </div>
+
+</div>
+
+<!-- ═══ Modal: リストに保存 ═══ -->
+<div class="modal-overlay" id="saveModal">
+  <div class="modal">
+    <h3>📦 商品をリストに保存</h3>
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div class="field">
+        <label>商品名 *</label>
+        <input type="text" id="m_name" placeholder="例: ニンテンドースイッチ（本体）">
+      </div>
+      <div class="field">
+        <label>ステータス</label>
+        <select id="m_status">
+          <option value="purchased">仕入済</option>
+          <option value="listed">出品中</option>
+          <option value="sold">売却済</option>
+          <option value="returned">返品</option>
+        </select>
+      </div>
+      <div class="input-grid" style="gap:12px;">
+        <div class="field">
+          <label>購入店舗</label>
+          <input type="text" id="m_store" placeholder="例: ハードオフ〇〇店">
+        </div>
+        <div class="field">
+          <label>購入日</label>
+          <input type="date" id="m_purchasedAt">
+        </div>
+        <div class="field">
+          <label>売却日</label>
+          <input type="date" id="m_soldAt">
+        </div>
+        <div class="field">
+          <label>出品URL</label>
+          <input type="text" id="m_listingUrl" placeholder="https://...">
+        </div>
+      </div>
+      <div class="field">
+        <label>出品下書き・メモ</label>
+        <textarea id="m_memo" placeholder="商品説明の下書きや状態メモなど..."></textarea>
+      </div>
+    </div>
+    <div class="action-row">
+      <button class="btn-primary" onclick="confirmSave()">保存する</button>
+      <button class="btn-ghost" onclick="closeModal('saveModal')">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Modal: 商品編集 ═══ -->
+<div class="modal-overlay" id="editModal">
+  <div class="modal">
+    <h3>✏️ 商品を編集</h3>
+    <input type="hidden" id="e_id">
+    <div style="display:flex;flex-direction:column;gap:14px;">
+      <div class="field">
+        <label>商品名 *</label>
+        <input type="text" id="e_name">
+      </div>
+      <div class="field">
+        <label>ステータス</label>
+        <select id="e_status">
+          <option value="purchased">仕入済</option>
+          <option value="listed">出品中</option>
+          <option value="sold">売却済</option>
+          <option value="returned">返品</option>
+        </select>
+      </div>
+      <div class="input-grid" style="gap:12px;">
+        <div class="field">
+          <label>購入店舗</label>
+          <input type="text" id="e_store">
+        </div>
+        <div class="field">
+          <label>購入日</label>
+          <input type="date" id="e_purchasedAt">
+        </div>
+        <div class="field">
+          <label>売却日</label>
+          <input type="date" id="e_soldAt">
+        </div>
+        <div class="field">
+          <label>出品URL</label>
+          <input type="text" id="e_listingUrl">
+        </div>
+      </div>
+      <div class="field">
+        <label>出品下書き・メモ</label>
+        <textarea id="e_memo"></textarea>
+      </div>
+    </div>
+    <div class="action-row">
+      <button class="btn-primary" onclick="confirmEdit()">更新する</button>
+      <button class="btn-ghost" onclick="closeModal('editModal')">キャンセル</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// ════════════════════════════════════════════
+//  CONSTANTS & STATE
+// ════════════════════════════════════════════
+const PRESETS = [
+  { name: 'メルカリ',    rate: 10,  fixed: 0 },
+  { name: 'ヤフオク',    rate: 8.8, fixed: 0 },
+  { name: 'ヤフーフリマ', rate: 5,   fixed: 0 },
+  { name: 'Amazon',      rate: 15,  fixed: 0 },
+  { name: 'ラクマ',      rate: 6,   fixed: 0 },
+  { name: 'カスタム',    rate: null, fixed: null },
+];
+let activePreset = 0;
+
+const STATUS_LABEL = {
+  purchased: '仕入済',
+  listed:    '出品中',
+  sold:      '売却済',
+  returned:  '返品',
+};
+
+// ════════════════════════════════════════════
+//  STORAGE  ← Firebase SDK (module script) で定義済み
+// ════════════════════════════════════════════
+
+// ════════════════════════════════════════════
+//  TAB 1: CALCULATOR
+// ════════════════════════════════════════════
+function buildPresets() {
+  const row = document.getElementById('presetRow');
+  PRESETS.forEach((p, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'preset-btn' + (i === 0 ? ' active' : '');
+    btn.textContent = p.name;
+    btn.onclick = () => applyPreset(i);
+    row.appendChild(btn);
+  });
+}
+
+function applyPreset(i) {
+  activePreset = i;
+  document.querySelectorAll('.preset-btn').forEach((b, j) =>
+    b.classList.toggle('active', i === j));
+  const p = PRESETS[i];
+  if (p.rate !== null) {
+    document.getElementById('feeRate').value = p.rate;
+    document.getElementById('feeFixed').value = p.fixed;
+  }
+  calc();
+}
+
+function n(id) { return parseFloat(document.getElementById(id).value) || 0; }
+
+function calc() {
+  const price = n('price'), cost = n('cost'),
+        shipping = n('shipping'), misc = n('misc'),
+        feeRate = n('feeRate'), feeFixed = n('feeFixed');
+  const fee = Math.round(price * feeRate / 100) + feeFixed;
+  const totalCost = cost + shipping + misc + fee;
+  const profit = price - totalCost;
+  const margin = price > 0 ? (profit / price * 100) : 0;
+  const roi    = cost  > 0 ? (profit / cost  * 100) : 0;
+
+  const profitEl = document.getElementById('resultProfit');
+  profitEl.textContent = (price === 0 && cost === 0) ? '—' :
+    (profit >= 0 ? '+' : '') + fmt(profit) + '円';
+  profitEl.className = 'result-value ' +
+    ((price === 0 && cost === 0) ? 'zero' : profit > 0 ? 'positive' : profit < 0 ? 'negative' : 'zero');
+
+  document.getElementById('resultMargin').textContent = price === 0 ? '—' : margin.toFixed(1) + '%';
+  document.getElementById('resultMargin').style.color =
+    margin > 20 ? 'var(--green)' : margin > 0 ? 'var(--accent)' : margin < 0 ? 'var(--red)' : 'var(--muted)';
+  document.getElementById('subPrice').textContent = '¥' + fmt(price);
+  document.getElementById('subFee').textContent   = '¥' + fmt(fee);
+  document.getElementById('subTotal').textContent = '¥' + fmt(totalCost);
+
+  const roiCapped = Math.min(Math.max(roi, 0), 100);
+  document.getElementById('roiBar').style.width = roiCapped + '%';
+  document.getElementById('roiBar').style.background =
+    roi >= 30 ? 'var(--green)' : roi >= 0 ? 'var(--accent)' : 'var(--red)';
+  document.getElementById('roiLabel').textContent = cost === 0 ? '—' : roi.toFixed(1) + '%';
+}
+
+function fmt(v) { return Math.round(v).toLocaleString('ja-JP'); }
+
+function resetCalc() {
+  ['cost','price','shipping','misc'].forEach(id => document.getElementById(id).value = '');
+  calc();
+}
+
+// ── Save modal (from Tab 1) ──
+function openSaveModal() {
+  // pre-fill today's date
+  document.getElementById('m_purchasedAt').value = todayStr();
+  document.getElementById('m_name').value = '';
+  document.getElementById('m_status').value = 'purchased';
+  document.getElementById('m_store').value = '';
+  document.getElementById('m_soldAt').value = '';
+  document.getElementById('m_listingUrl').value = '';
+  document.getElementById('m_memo').value = '';
+  document.getElementById('saveModal').classList.add('open');
+}
+
+async function confirmSave() {
+  const name = document.getElementById('m_name').value.trim();
+  if (!name) { showToast('⚠️ 商品名を入力してください', 'warn'); return; }
+
+  const price = n('price'), cost = n('cost'),
+        shipping = n('shipping'), misc = n('misc'),
+        feeRate = n('feeRate'), feeFixed = n('feeFixed');
+  const fee    = Math.round(price * feeRate / 100) + feeFixed;
+  const profit = price - cost - shipping - misc - fee;
+
+  const record = {
+    id: Date.now(),
+    name,
+    status:      document.getElementById('m_status').value,
+    store:       document.getElementById('m_store').value.trim(),
+    purchasedAt: document.getElementById('m_purchasedAt').value,
+    soldAt:      document.getElementById('m_soldAt').value,
+    listingUrl:  document.getElementById('m_listingUrl').value.trim(),
+    memo:        document.getElementById('m_memo').value.trim(),
+    platform:    PRESETS[activePreset].name,
+    cost, price, shipping, misc, feeRate, feeFixed, fee, profit,
+    margin: price > 0 ? (profit / price * 100) : 0,
+    createdAt: new Date().toISOString(),
+  };
+
+  await addItem(record);
+
+  closeModal('saveModal');
+  showToast('✓ リストに保存しました');
+  resetCalc();
+}
+
+// ════════════════════════════════════════════
+//  TAB 2: LIST
+// ════════════════════════════════════════════
+async function renderList() {
+  const q      = (document.getElementById('listSearch').value || '').toLowerCase();
+  const fStat  = document.getElementById('listFilterStatus').value;
+  const sortBy = document.getElementById('listSort').value;
+
+  let list = await getList();
+
+  // filter
+  list = list.filter(item => {
+    const matchText = !q ||
+      (item.name  || '').toLowerCase().includes(q) ||
+      (item.store || '').toLowerCase().includes(q);
+    const matchStat = !fStat || item.status === fStat;
+    return matchText && matchStat;
+  });
+
+  // sort
+  list.sort((a, b) => {
+    if (sortBy === 'oldest')      return a.id - b.id;
+    if (sortBy === 'profit_desc') return (b.profit||0) - (a.profit||0);
+    if (sortBy === 'profit_asc')  return (a.profit||0) - (b.profit||0);
+    return b.id - a.id; // newest
+  });
+
+  document.getElementById('listCount').textContent = list.length + '件';
+
+  const container = document.getElementById('listContainer');
+
+  if (list.length === 0) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="e-icon">📭</div>
+        <h3>NO ITEMS</h3>
+        <p>まだ商品がありません。<br>利益計算タブで計算後、リストに保存してください。</p>
+      </div>`;
+    return;
+  }
+
+  container.innerHTML = '';
+  const searches = await getSearchHistory();
+  container.innerHTML = list.map(item => buildProductCard(item, searches)).join('');
+
+  // restore expanded state
+  container.querySelectorAll('.product-card').forEach(card => {
+    card.querySelector('.pc-header').addEventListener('click', () => {
+      card.classList.toggle('expanded');
+    });
+  });
+}
+
+function buildProductCard(item, searches) {
+  const profitCls = item.profit > 0 ? 'pos' : item.profit < 0 ? 'neg' : '';
+  const profitStr = (item.profit >= 0 ? '+' : '') + fmt(item.profit) + '円';
+  const nameCls   = item.name ? '' : ' unnamed';
+  const nameDisp  = item.name || '（名前未設定）';
+  const st        = item.status || 'purchased';
+
+  const statusSelect = `
+    <select class="status-select status-${st}" onchange="changeItemStatus(${item.id},this)"
+      onclick="event.stopPropagation()">
+      <option value="purchased" ${st==='purchased'?'selected':''}>仕入済</option>
+      <option value="listed"    ${st==='listed'   ?'selected':''}>出品中</option>
+      <option value="sold"      ${st==='sold'     ?'selected':''}>売却済</option>
+      <option value="returned"  ${st==='returned' ?'selected':''}>返品</option>
+    </select>`;
+
+  const metaRows = [
+    item.store       ? `<span>🏪 ${esc(item.store)}</span>` : '',
+    item.purchasedAt ? `<span>📅 仕入 ${item.purchasedAt}</span>` : '',
+    item.soldAt      ? `<span>✅ 売却 ${item.soldAt}</span>` : '',
+    item.platform    ? `<span>🏷️ ${esc(item.platform)}</span>` : '',
+  ].filter(Boolean).join('<span style="color:var(--border);margin:0 2px">•</span>');
+
+  const memoHtml = item.memo
+    ? `<div class="field" style="margin-top:10px;">
+         <label>メモ・出品下書き</label>
+         <div style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:10px 12px;font-size:.82rem;line-height:1.7;white-space:pre-wrap;color:var(--label)">${esc(item.memo)}</div>
+       </div>` : '';
+
+  const urlHtml = item.listingUrl
+    ? `<div class="field" style="margin-top:10px;">
+         <label>出品URL</label>
+         <a href="${esc(item.listingUrl)}" target="_blank" style="color:var(--blue);font-size:.82rem;word-break:break-all;">${esc(item.listingUrl)}</a>
+       </div>` : '';
+
+  // 紐付き相場検索
+  const itemSearches = (searches||[]).filter(s => (s.linkedIds||[]).includes(item.id));
+  const searchHtml = itemSearches.length ? `
+    <div class="field" style="margin-top:10px;">
+      <label>紐付き相場検索</label>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px;">
+        ${itemSearches.map(s => `
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <span style="font-size:.75rem;color:var(--label);">🔍 ${esc(s.query)}</span>
+            <button class="btn-ghost btn-sm" onclick="event.stopPropagation();jumpToSearch('${esc(s.query)}')">再検索</button>
+          </div>`).join('')}
+      </div>
+    </div>` : '';
+
+  return `
+  <div class="product-card" id="card-${item.id}">
+    <div class="pc-header">
+      <span class="pc-chevron">▶</span>
+      <span class="pc-name${nameCls}">${esc(nameDisp)}</span>
+      <div class="pc-meta">
+        ${statusSelect}
+        <span class="pc-profit ${profitCls}">${profitStr}</span>
+      </div>
+    </div>
+    <div class="pc-body">
+      ${metaRows ? `<div style="font-size:.72rem;color:var(--muted);margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;">${metaRows}</div>` : ''}
+      <div class="num-summary">
+        <div class="ns-item"><div class="ns-label">仕入</div><div class="ns-val">¥${fmt(item.cost||0)}</div></div>
+        <div class="ns-item"><div class="ns-label">売値</div><div class="ns-val">¥${fmt(item.price||0)}</div></div>
+        <div class="ns-item"><div class="ns-label">手数料</div><div class="ns-val" style="color:var(--accent2)">¥${fmt(item.fee||0)}</div></div>
+        <div class="ns-item"><div class="ns-label">送料</div><div class="ns-val" style="color:var(--accent2)">¥${fmt(item.shipping||0)}</div></div>
+        <div class="ns-item"><div class="ns-label">利益率</div><div class="ns-val" style="color:${(item.margin||0)>0?'var(--green)':'var(--red)'}">${(item.margin||0).toFixed(1)}%</div></div>
+      </div>
+      ${memoHtml}
+      ${urlHtml}
+      ${searchHtml}
+      <div class="pc-actions" style="margin-top:14px;">
+        <button class="btn-ghost btn-sm" onclick="openEditModal(${item.id})">✏️ 編集</button>
+        <button class="btn-danger btn-sm" onclick="deleteItem(${item.id})">🗑 削除</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function changeItemStatus(id, sel) {
+  const newStatus = sel.value;
+  const list = await getList();
+  const item = list.find(x => x.id === id);
+  if (!item) return;
+  item.status = newStatus;
+  item.updatedAt = new Date().toISOString();
+  await updateItem(item);
+  sel.className = 'status-select status-' + newStatus;
+  showToast('✓ ステータスを更新しました');
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Edit modal ──
+async function openEditModal(id) {
+  const list = await getList();
+  const item = list.find(x => x.id === id);
+  if (!item) return;
+
+  document.getElementById('e_id').value          = id;
+  document.getElementById('e_name').value        = item.name || '';
+  document.getElementById('e_status').value      = item.status || 'purchased';
+  document.getElementById('e_store').value       = item.store || '';
+  document.getElementById('e_purchasedAt').value = item.purchasedAt || '';
+  document.getElementById('e_soldAt').value      = item.soldAt || '';
+  document.getElementById('e_listingUrl').value  = item.listingUrl || '';
+  document.getElementById('e_memo').value        = item.memo || '';
+
+  document.getElementById('editModal').classList.add('open');
+}
+
+async function confirmEdit() {
+  const id   = parseInt(document.getElementById('e_id').value);
+  const name = document.getElementById('e_name').value.trim();
+  if (!name) { showToast('⚠️ 商品名を入力してください', 'warn'); return; }
+
+  const list = await getList();
+  const base = list.find(x => x.id === id);
+  if (!base) return;
+
+  const updated = {
+    ...base,
+    name,
+    status:      document.getElementById('e_status').value,
+    store:       document.getElementById('e_store').value.trim(),
+    purchasedAt: document.getElementById('e_purchasedAt').value,
+    soldAt:      document.getElementById('e_soldAt').value,
+    listingUrl:  document.getElementById('e_listingUrl').value.trim(),
+    memo:        document.getElementById('e_memo').value.trim(),
+    updatedAt:   new Date().toISOString(),
+  };
+
+  await updateItem(updated);
+  closeModal('editModal');
+  renderList();
+  showToast('✓ 更新しました');
+}
+
+async function deleteItem(id) {
+  if (!confirm('この商品を削除しますか？')) return;
+  await removeItem(id);
+  renderList();
+  showToast('🗑 削除しました');
+}
+
+// ════════════════════════════════════════════
+//  TAB 3: PRICE SEARCH
+// ════════════════════════════════════════════
+const SEARCH_SITES = [
+  { name: 'メルカリ',        icon: '🛍', color: '#e8380d', url: q => `https://jp.mercari.com/search?keyword=${encodeURIComponent(q)}&status=on_sale` },
+  { name: 'メルカリ(売切)',   icon: '✅', color: '#c0200a', url: q => `https://jp.mercari.com/search?keyword=${encodeURIComponent(q)}&status=sold_out` },
+  { name: 'Yahoo!フリマ',    icon: '🟡', color: '#f5a623', url: q => `https://paypayfleamarket.yahoo.co.jp/search/${encodeURIComponent(q)}?withSpeller=0` },
+  { name: 'Yahoo!フリマ(売切)', icon: '🏷', color: '#c07800', url: q => `https://paypayfleamarket.yahoo.co.jp/search/${encodeURIComponent(q)}?withSpeller=0&sold=1` },
+  { name: 'ヤフオク',        icon: '🔨', color: '#e60026', url: q => `https://auctions.yahoo.co.jp/search/search?p=${encodeURIComponent(q)}` },
+  { name: 'Amazon',          icon: '📦', color: '#ff9900', url: q => `https://www.amazon.co.jp/s?k=${encodeURIComponent(q)}` },
+  { name: 'ラクマ',          icon: '💚', color: '#00b900', url: q => `https://fril.jp/search?query=${encodeURIComponent(q)}` },
+  { name: 'eBay',            icon: '🌐', color: '#4fa8e8', url: q => `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(q)}` },
+];
+
+let currentSearchQuery = '';
+
+// getSearchHistory / setSearchHistory → Firebase module で定義済み
+
+async function initSearchTab() {
+  const list = await getList();
+  const container = document.getElementById('searchFromList');
+  if (list.length === 0) {
+    container.innerHTML = '<span style="font-size:.72rem;color:var(--muted);">（商品リストが空です）</span>';
+  } else {
+    container.innerHTML = list.slice().reverse().slice(0, 12).map(item =>
+      `<button class="preset-btn" onclick="pickFromList('${esc(item.name||'')}')">${esc(item.name || '名無し')}</button>`
+    ).join('');
+  }
+  const sel = document.getElementById('linkTarget');
+  sel.innerHTML = '<option value="">— 商品を選択 —</option>' +
+    list.map(item => `<option value="${item.id}">${esc(item.name || '名無し')}</option>`).join('');
+
+  renderSearchHistory();
+}
+
+function pickFromList(name) {
+  document.getElementById('searchQuery').value = name;
+  doSearch();
+}
+
+async function doSearch() {
+  const q = document.getElementById('searchQuery').value.trim();
+  if (!q) return;
+  currentSearchQuery = q;
+
+  // 検索リンクカードを生成
+  const linksEl = document.getElementById('searchLinks');
+  linksEl.innerHTML = SEARCH_SITES.map(site => `
+    <a href="${site.url(q)}" target="_blank" rel="noopener" style="
+      display:flex;align-items:center;gap:12px;
+      background:var(--surface);border:1px solid var(--border);
+      border-radius:6px;padding:14px 16px;text-decoration:none;
+      transition:border-color .18s;cursor:pointer;
+      border-left:3px solid ${site.color};"
+      onmouseover="this.style.borderColor='${site.color}'"
+      onmouseout="this.style.borderColor='var(--border)';this.style.borderLeftColor='${site.color}'">
+      <span style="font-size:1.3rem;">${site.icon}</span>
+      <div>
+        <div style="font-size:.82rem;font-weight:700;color:var(--text);">${site.name}</div>
+        <div style="font-size:.65rem;color:var(--muted);margin-top:2px;">「${esc(q)}」で検索</div>
+      </div>
+      <span style="margin-left:auto;font-size:.72rem;color:var(--muted);">↗</span>
+    </a>`).join('');
+
+  document.getElementById('searchResultsArea').style.display = 'block';
+
+  const hist = await getSearchHistory();
+  const existing = hist.find(h => h.query === q);
+  if (!existing) {
+    await addSearch({ id: Date.now(), query: q, linkedIds: [], memos: [], searchedAt: new Date().toISOString() });
+  }
+
+  renderLinkedItems(q);
+  renderSearchHistory();
+}
+
+function clearSearch() {
+  document.getElementById('searchQuery').value = '';
+  document.getElementById('searchResultsArea').style.display = 'none';
+  currentSearchQuery = '';
+}
+
+async function saveSearchMemo() {
+  const memo = document.getElementById('searchMemoInput').value.trim();
+  if (!memo || !currentSearchQuery) return;
+  const hist = await getSearchHistory();
+  const entry = hist.find(h => h.query === currentSearchQuery);
+  if (entry) {
+    entry.memos = entry.memos || [];
+    entry.memos.push({ text: memo, at: new Date().toISOString() });
+    await updateSearch(entry);
+  }
+  document.getElementById('searchMemoInput').value = '';
+  renderSearchHistory();
+  renderMemoList();
+  showToast('✓ メモを保存しました');
+}
+
+async function renderMemoList() {
+  const hist = await getSearchHistory();
+  const entry = hist.find(h => h.query === currentSearchQuery);
+  const el = document.getElementById('searchMemoList');
+  if (!entry || !entry.memos || entry.memos.length === 0) { el.innerHTML = ''; return; }
+  el.innerHTML = entry.memos.slice().reverse().map((m, ri) => {
+    const i = entry.memos.length - 1 - ri;
+    return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px 12px;margin-top:6px;display:flex;gap:10px;align-items:flex-start;">
+      <span style="font-size:.78rem;color:var(--label);flex:1;white-space:pre-wrap;">${esc(m.text)}</span>
+      <span style="font-size:.62rem;color:var(--muted);white-space:nowrap;">${m.at.slice(0,10)}</span>
+      <button class="btn-danger btn-sm" style="padding:2px 8px;" onclick="deleteMemo('${currentSearchQuery}',${i})">×</button>
+    </div>`;
+  }).join('');
+}
+
+async function deleteMemo(query, idx) {
+  const hist = await getSearchHistory();
+  const entry = hist.find(h => h.query === query);
+  if (entry && entry.memos) {
+    entry.memos.splice(idx, 1);
+    await updateSearch(entry);
+  }
+  renderMemoList();
+  renderSearchHistory();
+}
+
+async function linkToItem() {
+  const sel = document.getElementById('linkTarget');
+  const itemId = parseInt(sel.value);
+  if (!itemId || !currentSearchQuery) return;
+  const hist = await getSearchHistory();
+  const entry = hist.find(h => h.query === currentSearchQuery);
+  if (entry) {
+    entry.linkedIds = entry.linkedIds || [];
+    if (!entry.linkedIds.includes(itemId)) {
+      entry.linkedIds.push(itemId);
+      await updateSearch(entry);
+      showToast('✓ 商品と紐付けました');
+    } else {
+      showToast('⚠️ すでに紐付け済みです', 'warn');
+    }
+  }
+  renderLinkedItems(currentSearchQuery);
+}
+
+async function renderLinkedItems(query) {
+  const hist = await getSearchHistory();
+  const entry = hist.find(h => h.query === query);
+  const el = document.getElementById('linkedItems');
+  if (!entry || !entry.linkedIds || entry.linkedIds.length === 0) { el.innerHTML = ''; return; }
+  const list = await getList();
+  el.innerHTML = entry.linkedIds.map(id => {
+    const item = list.find(x => x.id === id);
+    if (!item) return '';
+    return `<div style="display:flex;align-items:center;gap:10px;background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px 12px;margin-top:6px;">
+      <span style="font-size:.82rem;flex:1;color:var(--text);">📦 ${esc(item.name||'名無し')}</span>
+      <button class="btn-danger btn-sm" style="padding:2px 8px;" onclick="unlinkItem('${query}',${id})">解除</button>
+    </div>`;
+  }).join('');
+}
+
+async function unlinkItem(query, itemId) {
+  const hist = await getSearchHistory();
+  const entry = hist.find(h => h.query === query);
+  if (entry) {
+    entry.linkedIds = (entry.linkedIds || []).filter(id => id !== itemId);
+    await updateSearch(entry);
+  }
+  renderLinkedItems(query);
+  showToast('紐付けを解除しました');
+}
+
+async function renderSearchHistory() {
+  const hist = await getSearchHistory();
+  const el = document.getElementById('searchHistory');
+  if (hist.length === 0) {
+    el.innerHTML = '<div class="empty-state" style="padding:30px 20px;"><div class="e-icon">🔍</div><h3 style="font-size:.85rem;">NO HISTORY</h3><p>まだ検索履歴がありません。</p></div>';
+    return;
+  }
+  const list = await getList();
+  el.innerHTML = hist.map(entry => {
+    const linkedNames = (entry.linkedIds||[]).map(id => {
+      const item = list.find(x => x.id === id);
+      return item ? esc(item.name||'名無し') : null;
+    }).filter(Boolean);
+    const memoCount = (entry.memos||[]).length;
+    return `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:12px 16px;margin-bottom:8px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;cursor:pointer;"
+      onclick="jumpToSearch('${esc(entry.query)}')">
+      <span style="font-size:.88rem;font-weight:700;flex:1;min-width:120px;">${esc(entry.query)}</span>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        ${linkedNames.map(n => `<span style="font-size:.65rem;background:#1a2a4a;color:var(--blue);border:1px solid #2a4a7a;padding:2px 8px;border-radius:20px;">📦 ${n}</span>`).join('')}
+        ${memoCount > 0 ? `<span style="font-size:.65rem;background:#22263a;color:var(--label);border:1px solid var(--border);padding:2px 8px;border-radius:20px;">📝 ${memoCount}件</span>` : ''}
+        <span style="font-size:.65rem;color:var(--muted);">${entry.searchedAt.slice(0,10)}</span>
+        <button class="btn-danger btn-sm" style="padding:2px 8px;" onclick="event.stopPropagation();deleteHistory(${entry.id})">×</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function jumpToSearch(query) {
+  switchTab('search', document.querySelectorAll('.tab-btn')[2]);
+  document.getElementById('searchQuery').value = query;
+  doSearch();
+  renderMemoList();
+  window.scrollTo(0, 0);
+}
+
+async function deleteHistory(id) {
+  await removeSearch(id);
+  renderSearchHistory();
+}
+// ════════════════════════════════════════════
+//  TAB 4: DASHBOARD
+// ════════════════════════════════════════════
+let dashRange = 'all';
+let chartMonthly = null, chartPlatform = null, chartStatus = null;
+
+function setRange(range, btn) {
+  dashRange = range;
+  document.querySelectorAll('#tab-dash .preset-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  initDash();
+}
+
+function filterByRange(list) {
+  const now = new Date();
+  return list.filter(item => {
+    const d = new Date(item.createdAt);
+    if (dashRange === 'year')  return d.getFullYear() === now.getFullYear();
+    if (dashRange === 'month') return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    return true;
+  });
+}
+
+async function initDash() {
+  const raw  = await getList();
+  const list = filterByRange(raw);
+
+  // range label
+  const now = new Date();
+  const labels = { all: '全期間', year: now.getFullYear() + '年', month: now.getFullYear() + '年' + (now.getMonth()+1) + '月' };
+  document.getElementById('dashRangeLabel').textContent = labels[dashRange] + ' / ' + list.length + '件';
+
+  buildKPI(list);
+  buildMonthlyChart(list);
+  buildPlatformChart(list);
+  buildStatusChart(list);
+  buildRanking(list);
+}
+
+function buildKPI(list) {
+  const sold     = list.filter(x => x.status === 'sold');
+  const active   = list.filter(x => x.status === 'listed' || x.status === 'purchased');
+  const totalProfit  = sold.reduce((s, x) => s + (x.profit||0), 0);
+  const totalCost    = list.reduce((s, x) => s + (x.cost||0), 0);
+  const avgMargin    = sold.length ? sold.reduce((s, x) => s + (x.margin||0), 0) / sold.length : 0;
+  const roi          = totalCost > 0 ? totalProfit / totalCost * 100 : 0;
+
+  const kpis = [
+    { label: '総利益（売却済）', value: (totalProfit >= 0 ? '+' : '') + '¥' + fmt(totalProfit), sub: sold.length + '件売却', cls: totalProfit >= 0 ? 'green' : 'red' },
+    { label: '仕入総額',         value: '¥' + fmt(totalCost),   sub: list.length + '件仕入',     cls: 'accent' },
+    { label: '平均利益率',        value: avgMargin.toFixed(1) + '%', sub: '売却済のみ',            cls: avgMargin >= 20 ? 'green' : 'blue' },
+    { label: 'ROI',              value: roi.toFixed(1) + '%',   sub: '利益 / 仕入総額',           cls: roi >= 30 ? 'green' : roi >= 0 ? 'blue' : 'red' },
+    { label: '在庫中',           value: active.length + '件',   sub: '仕入済 + 出品中',           cls: 'blue' },
+    { label: '在庫評価額',       value: '¥' + fmt(active.reduce((s,x) => s+(x.cost||0),0)), sub: '仕入値合計', cls: 'accent' },
+  ];
+
+  document.getElementById('kpiRow').innerHTML = kpis.map(k => `
+    <div class="kpi-card ${k.cls}">
+      <div class="kpi-label">${k.label}</div>
+      <div class="kpi-value">${k.value}</div>
+      <div class="kpi-sub">${k.sub}</div>
+    </div>`).join('');
+}
+
+function buildMonthlyChart(list) {
+  // 過去12ヶ月のラベルを生成
+  const months = [];
+  const now = new Date();
+  for (let i = 11; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    months.push({ key: d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0'), label: (d.getMonth()+1) + '月' });
+  }
+
+  const profitMap = {}, costMap = {};
+  months.forEach(m => { profitMap[m.key] = 0; costMap[m.key] = 0; });
+
+  list.forEach(item => {
+    const d = new Date(item.createdAt);
+    const key = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+    if (key in costMap) costMap[key] += (item.cost||0);
+    if (item.status === 'sold' && key in profitMap) profitMap[key] += (item.profit||0);
+  });
+
+  const profits = months.map(m => profitMap[m.key]);
+  const costs   = months.map(m => costMap[m.key]);
+  const hasData = profits.some(v => v !== 0) || costs.some(v => v !== 0);
+
+  document.getElementById('monthlyEmpty').style.display = hasData ? 'none' : 'block';
+  document.getElementById('monthlyChart').style.display = hasData ? 'block' : 'none';
+
+  if (!hasData) return;
+
+  if (chartMonthly) chartMonthly.destroy();
+  chartMonthly = new Chart(document.getElementById('monthlyChart'), {
+    type: 'bar',
+    data: {
+      labels: months.map(m => m.label),
+      datasets: [
+        {
+          label: '利益',
+          data: profits,
+          backgroundColor: profits.map(v => v >= 0 ? 'rgba(61,220,132,0.7)' : 'rgba(255,79,79,0.7)'),
+          borderRadius: 3,
+          order: 1,
+        },
+        {
+          label: '仕入額',
+          data: costs,
+          type: 'line',
+          borderColor: 'rgba(245,166,35,0.8)',
+          backgroundColor: 'transparent',
+          pointBackgroundColor: 'rgba(245,166,35,1)',
+          pointRadius: 3,
+          tension: 0.3,
+          borderWidth: 2,
+          order: 0,
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { labels: { color: '#9ba3c4', font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: ctx => ' ¥' + fmt(ctx.raw)
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { color: '#6b7094', font: { size: 10 } }, grid: { color: '#2e3350' } },
+        y: { ticks: { color: '#6b7094', font: { size: 10 }, callback: v => '¥' + fmt(v) }, grid: { color: '#2e3350' } }
+      }
+    }
+  });
+}
+
+function buildPlatformChart(list) {
+  const sold = list.filter(x => x.status === 'sold' && x.platform);
+  const map = {};
+  sold.forEach(x => { map[x.platform] = (map[x.platform]||0) + (x.profit||0); });
+  const keys = Object.keys(map);
+
+  document.getElementById('platformEmpty').style.display = keys.length ? 'none' : 'block';
+  document.getElementById('platformChart').style.display = keys.length ? 'block' : 'none';
+  if (!keys.length) return;
+
+  const colors = ['#f5a623','#3ddc84','#4fa8e8','#e05c2a','#a78bfa','#f472b6'];
+  if (chartPlatform) chartPlatform.destroy();
+  chartPlatform = new Chart(document.getElementById('platformChart'), {
+    type: 'doughnut',
+    data: {
+      labels: keys,
+      datasets: [{ data: keys.map(k => map[k]), backgroundColor: keys.map((_,i) => colors[i % colors.length]), borderWidth: 0 }]
+    },
+    options: {
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#9ba3c4', font: { size: 10 }, padding: 10 } },
+        tooltip: { callbacks: { label: ctx => ' ¥' + fmt(ctx.raw) } }
+      }
+    }
+  });
+}
+
+function buildStatusChart(list) {
+  const STATUS_LABEL_MAP = { purchased:'仕入済', listed:'出品中', sold:'売却済', returned:'返品' };
+  const map = { purchased:0, listed:0, sold:0, returned:0 };
+  list.forEach(x => { if (x.status in map) map[x.status]++; });
+  const keys = Object.keys(map).filter(k => map[k] > 0);
+
+  document.getElementById('statusEmpty').style.display = keys.length ? 'none' : 'block';
+  document.getElementById('statusChart').style.display = keys.length ? 'block' : 'none';
+  if (!keys.length) return;
+
+  const colorMap = { purchased:'#4fa8e8', listed:'#f5a623', sold:'#3ddc84', returned:'#ff4f4f' };
+  if (chartStatus) chartStatus.destroy();
+  chartStatus = new Chart(document.getElementById('statusChart'), {
+    type: 'doughnut',
+    data: {
+      labels: keys.map(k => STATUS_LABEL_MAP[k]),
+      datasets: [{ data: keys.map(k => map[k]), backgroundColor: keys.map(k => colorMap[k]), borderWidth: 0 }]
+    },
+    options: {
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#9ba3c4', font: { size: 10 }, padding: 10 } },
+        tooltip: { callbacks: { label: ctx => ' ' + ctx.raw + '件' } }
+      }
+    }
+  });
+}
+
+function buildRanking(list) {
+  const sold = list.filter(x => x.status === 'sold')
+    .sort((a, b) => (b.profit||0) - (a.profit||0))
+    .slice(0, 10);
+
+  const el = document.getElementById('rankingTable');
+  if (!sold.length) {
+    el.innerHTML = '<div style="text-align:center;padding:28px;color:var(--muted);font-size:.82rem;">売却済の商品がありません</div>';
+    return;
+  }
+
+  const medals = ['gold','silver','bronze'];
+  el.innerHTML = sold.map((item, i) => {
+    const profitCls = (item.profit||0) >= 0 ? 'pos' : 'neg';
+    const profitStr = ((item.profit||0) >= 0 ? '+' : '') + '¥' + fmt(item.profit||0);
+    return `<div class="rank-row">
+      <span class="rank-num ${medals[i]||''}">${i+1}</span>
+      <span class="rank-name">${esc(item.name||'名無し')}</span>
+      <span class="rank-plat">${esc(item.platform||'')}</span>
+      <span class="rank-profit ${profitCls}">${profitStr}</span>
+    </div>`;
+  }).join('');
+}
+
+
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+  if (name === 'list') renderList();
+  if (name === 'search') initSearchTab();
+  if (name === 'dash') initDash();
+}
+
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+}
+document.querySelectorAll('.modal-overlay').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+});
+
+function showToast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = type === 'warn' ? 'var(--accent)' : 'var(--green)';
+  t.style.color = '#0a1a12';
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+function todayStr() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// Init は Firebase module スクリプトから呼ばれます
+</script>
+</div><!-- /appWrapper -->
+</body>
+</html>
