@@ -668,7 +668,7 @@
 <header>
   <div>
     <div class="logo">SEDORI<span>TOOL</span></div>
-    <div class="tagline">せどり管理ツール v0.6</div>
+    <div class="tagline">せどり管理ツール v0.7</div>
   </div>
   <div class="user-info">
     <img class="user-avatar" id="userAvatar" src="" alt="">
@@ -955,6 +955,7 @@
     <h3>✏️ 商品を編集</h3>
     <input type="hidden" id="e_id">
     <div style="display:flex;flex-direction:column;gap:14px;">
+
       <div class="field">
         <label>商品名 *</label>
         <input type="text" id="e_name">
@@ -968,6 +969,63 @@
           <option value="returned">返品</option>
         </select>
       </div>
+
+      <!-- 価格・コスト -->
+      <div style="font-family:'Oxanium',monospace;font-size:.68rem;letter-spacing:.14em;color:var(--muted);padding-top:4px;border-top:1px solid var(--border);">PRICE / COST</div>
+      <div class="input-grid" style="gap:12px;">
+        <div class="field">
+          <label>仕入れ値</label>
+          <div class="input-wrap">
+            <input type="number" id="e_cost" min="0" oninput="calcEditProfit()">
+            <span class="unit">円</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>売値</label>
+          <div class="input-wrap">
+            <input type="number" id="e_price" min="0" oninput="calcEditProfit()">
+            <span class="unit">円</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>送料</label>
+          <div class="input-wrap">
+            <input type="number" id="e_shipping" min="0" oninput="calcEditProfit()">
+            <span class="unit">円</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>その他コスト</label>
+          <div class="input-wrap">
+            <input type="number" id="e_misc" min="0" oninput="calcEditProfit()">
+            <span class="unit">円</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>手数料率</label>
+          <div class="input-wrap">
+            <input type="number" id="e_feeRate" min="0" max="100" step="0.1" oninput="calcEditProfit()">
+            <span class="unit">%</span>
+          </div>
+        </div>
+        <div class="field">
+          <label>固定手数料</label>
+          <div class="input-wrap">
+            <input type="number" id="e_feeFixed" min="0" oninput="calcEditProfit()">
+            <span class="unit">円</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 利益プレビュー -->
+      <div id="e_profitPreview" style="background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:10px 14px;display:flex;gap:16px;flex-wrap:wrap;">
+        <div><div style="font-size:.62rem;color:var(--muted);margin-bottom:3px;">手数料</div><div style="font-family:'Oxanium',monospace;font-size:.85rem;color:var(--accent2);" id="e_previewFee">¥0</div></div>
+        <div><div style="font-size:.62rem;color:var(--muted);margin-bottom:3px;">純利益</div><div style="font-family:'Oxanium',monospace;font-size:.85rem;font-weight:700;" id="e_previewProfit">—</div></div>
+        <div><div style="font-size:.62rem;color:var(--muted);margin-bottom:3px;">利益率</div><div style="font-family:'Oxanium',monospace;font-size:.85rem;" id="e_previewMargin">—</div></div>
+      </div>
+
+      <!-- 店舗・日付 -->
+      <div style="font-family:'Oxanium',monospace;font-size:.68rem;letter-spacing:.14em;color:var(--muted);padding-top:4px;border-top:1px solid var(--border);">DETAILS</div>
       <div class="input-grid" style="gap:12px;">
         <div class="field">
           <label>購入店舗</label>
@@ -1292,13 +1350,41 @@ async function openEditModal(id) {
   document.getElementById('e_id').value          = id;
   document.getElementById('e_name').value        = item.name || '';
   document.getElementById('e_status').value      = item.status || 'purchased';
+  document.getElementById('e_cost').value        = item.cost || 0;
+  document.getElementById('e_price').value       = item.price || 0;
+  document.getElementById('e_shipping').value    = item.shipping || 0;
+  document.getElementById('e_misc').value        = item.misc || 0;
+  document.getElementById('e_feeRate').value     = item.feeRate ?? 10;
+  document.getElementById('e_feeFixed').value    = item.feeFixed || 0;
   document.getElementById('e_store').value       = item.store || '';
   document.getElementById('e_purchasedAt').value = item.purchasedAt || '';
   document.getElementById('e_soldAt').value      = item.soldAt || '';
   document.getElementById('e_listingUrl').value  = item.listingUrl || '';
   document.getElementById('e_memo').value        = item.memo || '';
 
+  calcEditProfit();
   document.getElementById('editModal').classList.add('open');
+}
+
+function calcEditProfit() {
+  const en = id => parseFloat(document.getElementById(id).value) || 0;
+  const price    = en('e_price');
+  const cost     = en('e_cost');
+  const shipping = en('e_shipping');
+  const misc     = en('e_misc');
+  const feeRate  = en('e_feeRate');
+  const feeFixed = en('e_feeFixed');
+  const fee      = Math.round(price * feeRate / 100) + feeFixed;
+  const profit   = price - cost - shipping - misc - fee;
+  const margin   = price > 0 ? profit / price * 100 : 0;
+
+  document.getElementById('e_previewFee').textContent = '¥' + Math.round(fee).toLocaleString('ja-JP');
+  const pEl = document.getElementById('e_previewProfit');
+  pEl.textContent = (profit >= 0 ? '+' : '') + Math.round(profit).toLocaleString('ja-JP') + '円';
+  pEl.style.color = profit > 0 ? 'var(--green)' : profit < 0 ? 'var(--red)' : 'var(--muted)';
+  const mEl = document.getElementById('e_previewMargin');
+  mEl.textContent = price > 0 ? margin.toFixed(1) + '%' : '—';
+  mEl.style.color = margin > 20 ? 'var(--green)' : margin > 0 ? 'var(--accent)' : 'var(--red)';
 }
 
 async function confirmEdit() {
@@ -1310,10 +1396,22 @@ async function confirmEdit() {
   const base = list.find(x => x.id === id);
   if (!base) return;
 
+  const en = eid => parseFloat(document.getElementById(eid).value) || 0;
+  const price    = en('e_price');
+  const cost     = en('e_cost');
+  const shipping = en('e_shipping');
+  const misc     = en('e_misc');
+  const feeRate  = en('e_feeRate');
+  const feeFixed = en('e_feeFixed');
+  const fee      = Math.round(price * feeRate / 100) + feeFixed;
+  const profit   = price - cost - shipping - misc - fee;
+  const margin   = price > 0 ? profit / price * 100 : 0;
+
   const updated = {
     ...base,
     name,
     status:      document.getElementById('e_status').value,
+    cost, price, shipping, misc, feeRate, feeFixed, fee, profit, margin,
     store:       document.getElementById('e_store').value.trim(),
     purchasedAt: document.getElementById('e_purchasedAt').value,
     soldAt:      document.getElementById('e_soldAt').value,
