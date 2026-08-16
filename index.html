@@ -6,106 +6,142 @@
 <title>せどり管理ツール</title>
 <link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@400;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+// ══════════════════════════════════════════
+//  ★ 開発モード切替フラグ
+//    true  → localStorage使用・ログイン不要（ローカルプレビュー用）
+//    false → Firebase + Googleログイン（GitHub Pages本番用）
+const DEV_MODE = false;
+// ══════════════════════════════════════════
+</script>
+
 <script type="module">
-  import { initializeApp }
-    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getDatabase, ref, set, get, remove }
-    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
-  import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged }
-    from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+  // ── DEV_MODE判定 ─────────────────────────────────
+  const DEV = window.DEV_MODE ?? true;
 
-  const firebaseConfig = {
-    apiKey: "AIzaSyA-qQTbe2m7m5IkzlBvtkrDEO-Wt4suhFQ",
-    authDomain: "sedori-tool-yn.firebaseapp.com",
-    databaseURL: "https://sedori-tool-yn-default-rtdb.asia-southeast1.firebasedatabase.app",
-    projectId: "sedori-tool-yn",
-    storageBucket: "sedori-tool-yn.firebasestorage.app",
-    messagingSenderId: "713057655344",
-    appId: "1:713057655344:web:20dc2f29bc6ed6d1062bf5"
-  };
+  // ════════════════════════════════════════
+  //  DEV_MODE: localStorage API
+  // ════════════════════════════════════════
+  function lsGet(key)      { return JSON.parse(localStorage.getItem(key) || 'null'); }
+  function lsSet(key, val) { localStorage.setItem(key, JSON.stringify(val)); }
 
-  const app      = initializeApp(firebaseConfig);
-  const db       = getDatabase(app);
-  const auth     = getAuth(app);
-  const provider = new GoogleAuthProvider();
-
-  // ── 低レベルhelper ─────────────────────────────────
-  async function fbGet(path) {
-    const snap = await get(ref(db, path));
-    return snap.exists() ? snap.val() : null;
+  function devGetList() {
+    const val = lsGet('sedori_list');
+    if (!val) return [];
+    return (Array.isArray(val) ? val : Object.values(val)).sort((a,b) => a.id - b.id);
   }
-  async function fbSet(path, val) { await set(ref(db, path), val); }
-  async function fbDel(path)      { await remove(ref(db, path)); }
-
-  // ── sedori_list API ───────────────────────────────
-  window.getList = async function() {
-    const val = await fbGet("sedori_list");
+  function devGetSearchHistory() {
+    const val = lsGet('sedori_searches');
     if (!val) return [];
-    return Object.values(val).sort((a,b) => a.id - b.id);
-  };
-  window.addItem    = async (item) => fbSet("sedori_list/" + item.id, item);
-  window.updateItem = async (item) => fbSet("sedori_list/" + item.id, item);
-  window.removeItem = async (id)   => fbDel("sedori_list/" + id);
+    return (Array.isArray(val) ? val : Object.values(val)).sort((a,b) => b.id - a.id);
+  }
+  function devSaveList(arr) {
+    const obj = {}; arr.forEach(x => obj[x.id] = x);
+    lsSet('sedori_list', obj);
+  }
+  function devSaveSearchHistory(arr) {
+    const obj = {}; arr.forEach(x => obj[x.id] = x);
+    lsSet('sedori_searches', obj);
+  }
 
-  // ── sedori_searches API ───────────────────────────
-  window.getSearchHistory = async function() {
-    const val = await fbGet("sedori_searches");
-    if (!val) return [];
-    return Object.values(val).sort((a,b) => b.id - a.id);
-  };
-  window.addSearch    = async (e) => fbSet("sedori_searches/" + e.id, e);
-  window.updateSearch = async (e) => fbSet("sedori_searches/" + e.id, e);
-  window.removeSearch = async (id) => fbDel("sedori_searches/" + id);
+  if (DEV) {
+    // ── localStorage版 API ───────────────────────
+    window.getList        = async () => devGetList();
+    window.addItem        = async (item) => { const a = devGetList(); a.push(item); devSaveList(a); };
+    window.updateItem     = async (item) => { const a = devGetList().map(x => x.id===item.id ? item : x); devSaveList(a); };
+    window.removeItem     = async (id)   => { devSaveList(devGetList().filter(x => x.id !== id)); };
+    window.getSearchHistory = async () => devGetSearchHistory();
+    window.addSearch      = async (e) => { const a = devGetSearchHistory(); a.unshift(e); devSaveSearchHistory(a); };
+    window.updateSearch   = async (e) => { const a = devGetSearchHistory().map(x => x.id===e.id ? e : x); devSaveSearchHistory(a); };
+    window.removeSearch   = async (id)  => { devSaveSearchHistory(devGetSearchHistory().filter(x => x.id !== id)); };
+    window.doLogin        = async () => {};
+    window.doLogout       = async () => {};
 
-  // ── Google ログイン ───────────────────────────────
-  window.doLogin = async function() {
-    try {
-      await signInWithPopup(auth, provider);
-    } catch(e) {
-      alert("ログインに失敗しました: " + e.message);
-    }
-  };
-  window.doLogout = async function() {
-    await signOut(auth);
-  };
-
-  // ── 認証状態の監視 → 画面制御 ────────────────────
-  onAuthStateChanged(auth, (user) => {
-    const overlay  = document.getElementById("loadingOverlay");
-    const loginScr = document.getElementById("loginScreen");
-    const appWrap  = document.getElementById("appWrapper");
-
-    if (user) {
-      // ログイン済み
-      document.getElementById("userAvatar").src  = user.photoURL || "";
-      document.getElementById("userName").textContent = user.displayName || user.email;
-      loginScr.style.display = "none";
-      appWrap.style.display  = "block";
-      overlay.style.display  = "none";
+    // ログイン画面スキップ・アプリ直表示
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('loadingOverlay').style.display = 'none';
+      document.getElementById('loginScreen').style.display    = 'none';
+      document.getElementById('appWrapper').style.display     = 'block';
+      const badge = document.getElementById('devModeBadge');
+      if (badge) badge.style.display = 'flex';
+      const userInfo = document.querySelector('.user-info');
+      if (userInfo) userInfo.style.display = 'none';
       buildPresets();
       calc();
-    } else {
-      // 未ログイン
-      loginScr.style.display = "flex";
-      appWrap.style.display  = "none";
-      overlay.style.display  = "none";
-    }
-  });
+    });
+
+  } else {
+    // ════════════════════════════════════════
+    //  PROD: Firebase API
+    // ════════════════════════════════════════
+    const { initializeApp } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js");
+    const { getDatabase, ref, set, get, remove } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js");
+    const { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } = await import("https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js");
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyA-qQTbe2m7m5IkzlBvtkrDEO-Wt4suhFQ",
+      authDomain: "sedori-tool-yn.firebaseapp.com",
+      databaseURL: "https://sedori-tool-yn-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "sedori-tool-yn",
+      storageBucket: "sedori-tool-yn.firebasestorage.app",
+      messagingSenderId: "713057655344",
+      appId: "1:713057655344:web:20dc2f29bc6ed6d1062bf5"
+    };
+
+    const app  = initializeApp(firebaseConfig);
+    const db   = getDatabase(app);
+    const auth = getAuth(app);
+    const prov = new GoogleAuthProvider();
+
+    async function fbGet(path) { const s = await get(ref(db,path)); return s.exists() ? s.val() : null; }
+    async function fbSet(path, val) { await set(ref(db, path), val); }
+    async function fbDel(path)      { await remove(ref(db, path)); }
+
+    window.getList          = async () => { const v=await fbGet("sedori_list"); return v ? Object.values(v).sort((a,b)=>a.id-b.id) : []; };
+    window.addItem          = async (item) => fbSet("sedori_list/"+item.id, item);
+    window.updateItem       = async (item) => fbSet("sedori_list/"+item.id, item);
+    window.removeItem       = async (id)   => fbDel("sedori_list/"+id);
+    window.getSearchHistory = async () => { const v=await fbGet("sedori_searches"); return v ? Object.values(v).sort((a,b)=>b.id-a.id) : []; };
+    window.addSearch        = async (e) => fbSet("sedori_searches/"+e.id, e);
+    window.updateSearch     = async (e) => fbSet("sedori_searches/"+e.id, e);
+    window.removeSearch     = async (id)  => fbDel("sedori_searches/"+id);
+    window.doLogin  = async () => { try { await signInWithPopup(auth, prov); } catch(e) { alert("ログイン失敗: "+e.message); } };
+    window.doLogout = async () => signOut(auth);
+
+    onAuthStateChanged(auth, (user) => {
+      const overlay  = document.getElementById("loadingOverlay");
+      const loginScr = document.getElementById("loginScreen");
+      const appWrap  = document.getElementById("appWrapper");
+      if (user) {
+        document.getElementById("userAvatar").src         = user.photoURL || "";
+        document.getElementById("userName").textContent   = user.displayName || user.email;
+        loginScr.style.display = "none";
+        appWrap.style.display  = "block";
+        overlay.style.display  = "none";
+        buildPresets();
+        calc();
+      } else {
+        loginScr.style.display = "flex";
+        appWrap.style.display  = "none";
+        overlay.style.display  = "none";
+      }
+    });
+  }
 </script>
 <style>
   :root {
-    --bg: #0f1117;
-    --surface: #1a1d27;
-    --surface2: #22263a;
-    --border: #2e3350;
-    --accent: #f5a623;
-    --accent2: #e05c2a;
-    --green: #3ddc84;
-    --red: #ff4f4f;
-    --blue: #4fa8e8;
-    --text: #e8eaf0;
-    --muted: #6b7094;
-    --label: #9ba3c4;
+    --bg: #F7F6F3;
+    --surface: #FFFFFF;
+    --surface2: #F1EFE9;
+    --border: #E3E0D9;
+    --accent: #E8823C;
+    --accent2: #C96A2E;
+    --green: #4A9B6E;
+    --red: #D65656;
+    --blue: #4A85C9;
+    --text: #37352F;
+    --muted: #9B978D;
+    --label: #6B685F;
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -120,42 +156,46 @@
   /* ── Header ── */
   header {
     background: var(--surface);
-    border-bottom: 2px solid var(--accent);
-    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    padding: 12px 16px;
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 10px;
+    flex-wrap: wrap;
   }
   .logo {
     font-family: 'Oxanium', monospace;
-    font-size: 1.3rem;
+    font-size: 1.1rem;
     font-weight: 700;
-    letter-spacing: .1em;
+    letter-spacing: .08em;
     color: var(--accent);
   }
   .logo span { color: var(--text); }
   .tagline {
-    font-size: .72rem;
+    font-size: .66rem;
     color: var(--muted);
-    letter-spacing: .08em;
-    margin-top: 2px;
+    letter-spacing: .04em;
+    margin-top: 1px;
   }
 
   /* ── Nav Tabs ── */
   nav {
     background: var(--surface);
-    display: flex;
-    gap: 2px;
-    padding: 0 24px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
     border-bottom: 1px solid var(--border);
-    overflow-x: auto;
   }
   .tab-btn {
     font-family: 'Noto Sans JP', sans-serif;
-    font-size: .78rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    font-size: .62rem;
     font-weight: 700;
-    letter-spacing: .06em;
-    padding: 11px 20px;
+    letter-spacing: .01em;
+    padding: 8px 2px 9px;
     background: none;
     border: none;
     color: var(--muted);
@@ -163,7 +203,10 @@
     border-bottom: 3px solid transparent;
     transition: color .2s, border-color .2s;
     white-space: nowrap;
+    min-width: 0;
   }
+  .tab-btn .tab-icon { font-size: 1.15rem; line-height: 1; }
+  .tab-btn .tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
   .tab-btn:hover { color: var(--text); }
   .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
   .tab-btn.disabled { opacity: .35; cursor: default; pointer-events: none; }
@@ -171,14 +214,17 @@
   /* ── Tab Panels ── */
   .tab-panel { display: none; padding: 28px 24px; max-width: 900px; margin: 0 auto; }
   .tab-panel.active { display: block; }
+  @media (max-width: 480px) {
+    .tab-panel { padding: 20px 14px; }
+  }
 
   /* ── Section Title ── */
   .section-title {
-    font-family: 'Oxanium', monospace;
-    font-size: .7rem;
-    letter-spacing: .18em;
-    color: var(--muted);
-    text-transform: uppercase;
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: .74rem;
+    font-weight: 700;
+    letter-spacing: .06em;
+    color: var(--label);
     margin-bottom: 14px;
     display: flex;
     align-items: center;
@@ -190,9 +236,10 @@
   .card {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 10px;
     padding: 22px 24px;
     margin-bottom: 18px;
+    box-shadow: 0 1px 3px rgba(55,53,47,.04), 0 1px 2px rgba(55,53,47,.06);
   }
 
   /* ── Platform Preset ── */
@@ -211,7 +258,7 @@
     letter-spacing: .04em;
   }
   .preset-btn:hover { border-color: var(--accent); color: var(--accent); }
-  .preset-btn.active { background: var(--accent); color: #111; border-color: var(--accent); }
+  .preset-btn.active { background: var(--accent); color: #FFFFFF; border-color: var(--accent); }
 
   /* ── Input Grid ── */
   .input-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px; }
@@ -228,21 +275,21 @@
   }
   input[type=number], input[type=text], input[type=date], select, textarea {
     width: 100%;
-    background: var(--bg);
+    background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: 6px;
     color: var(--text);
     font-family: 'Noto Sans JP', sans-serif;
-    font-size: .9rem;
+    font-size: 16px;
     padding: 9px 12px;
     outline: none;
-    transition: border-color .18s;
+    transition: border-color .18s, box-shadow .18s;
     -moz-appearance: textfield;
   }
   input[type=number] { padding-right: 38px; }
   input[type=number]::-webkit-outer-spin-button,
   input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; }
-  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(232,130,60,.12); }
   textarea { resize: vertical; min-height: 72px; line-height: 1.6; }
   select { cursor: pointer; }
 
@@ -250,7 +297,7 @@
   .result-card {
     background: var(--surface2);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 10px;
     padding: 20px 24px;
     margin-bottom: 18px;
   }
@@ -288,23 +335,23 @@
   /* ── Buttons ── */
   .btn-primary {
     font-family: 'Noto Sans JP', sans-serif;
-    font-size: .82rem; font-weight: 700; letter-spacing: .06em;
-    padding: 11px 28px; border-radius: 4px; border: none;
-    background: var(--accent); color: #111; cursor: pointer; transition: opacity .18s;
+    font-size: .82rem; font-weight: 700; letter-spacing: .04em;
+    padding: 11px 28px; border-radius: 6px; border: none;
+    background: var(--accent); color: #FFFFFF; cursor: pointer; transition: opacity .18s;
   }
-  .btn-primary:hover { opacity: .85; }
+  .btn-primary:hover { opacity: .88; }
   .btn-ghost {
     font-family: 'Noto Sans JP', sans-serif;
-    font-size: .82rem; font-weight: 700; letter-spacing: .06em;
-    padding: 11px 22px; border-radius: 4px;
-    border: 1px solid var(--border); background: transparent; color: var(--label);
+    font-size: .82rem; font-weight: 700; letter-spacing: .04em;
+    padding: 11px 22px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface); color: var(--label);
     cursor: pointer; transition: all .18s;
   }
-  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); background: var(--surface2); }
   .btn-danger {
     font-family: 'Noto Sans JP', sans-serif;
     font-size: .78rem; font-weight: 700;
-    padding: 7px 14px; border-radius: 4px;
+    padding: 7px 14px; border-radius: 6px;
     border: 1px solid var(--red); background: transparent; color: var(--red);
     cursor: pointer; transition: all .18s;
   }
@@ -340,12 +387,12 @@
   }
   .list-toolbar input[type=text] {
     flex: 1;
-    min-width: 160px;
-    font-size: .82rem;
+    min-width: 140px;
+    font-size: 16px;
     padding: 8px 12px;
   }
   .list-toolbar select {
-    font-size: .78rem;
+    font-size: 16px;
     padding: 8px 10px;
     width: auto;
   }
@@ -355,6 +402,79 @@
     color: var(--muted);
     letter-spacing: .08em;
     margin-left: auto;
+  }
+
+  /* View toggle */
+  .view-toggle {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .view-btn {
+    background: var(--surface2);
+    border: none;
+    color: var(--muted);
+    font-size: .9rem;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: all .18s;
+    line-height: 1;
+  }
+  .view-btn + .view-btn { border-left: 1px solid var(--border); }
+  .view-btn:hover { color: var(--text); }
+  .view-btn.active { background: var(--accent); color: #111; }
+
+  /* Grid view */
+  #listContainer.grid-view {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+  }
+  .grid-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    cursor: pointer;
+    transition: box-shadow .18s, border-color .18s;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 108px;
+    box-shadow: 0 1px 2px rgba(55,53,47,.04);
+  }
+  .grid-card:hover { border-color: var(--accent); box-shadow: 0 2px 8px rgba(55,53,47,.08); }
+  .grid-card .gc-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .grid-card .gc-name {
+    font-size: .8rem;
+    font-weight: 700;
+    line-height: 1.35;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .grid-card .gc-name.unnamed { color: var(--muted); font-style: italic; font-weight: 400; }
+  .grid-card .gc-profit {
+    font-family: 'Oxanium', monospace;
+    font-size: .92rem;
+    font-weight: 700;
+    margin-top: auto;
+  }
+  .grid-card .gc-profit.pos { color: var(--green); }
+  .grid-card .gc-profit.neg { color: var(--red); }
+  .grid-card .gc-meta {
+    font-size: .62rem;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* Status select (inline in card header) */
@@ -370,28 +490,44 @@
     outline: none;
     appearance: none;
     -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath fill='%236b7094' d='M0 0l4 5 4-5z'/%3E%3C/svg%3E");
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath fill='%239b978d' d='M0 0l4 5 4-5z'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 7px center;
     transition: opacity .18s;
   }
   .status-select:hover { opacity: .8; }
-  .status-select.status-purchased { background-color: #1a2a4a; color: var(--blue);  border: 1px solid #2a4a7a; }
-  .status-select.status-listed    { background-color: #2a2010; color: var(--accent); border: 1px solid #5a4010; }
-  .status-select.status-sold      { background-color: #0f2a1a; color: var(--green);  border: 1px solid #1a5a2a; }
-  .status-select.status-returned  { background-color: #2a1010; color: var(--red);    border: 1px solid #5a2020; }
-  .status-select option { background: #1a1d27; color: var(--text); font-size: .82rem; }
+  .status-select.status-purchased { background-color: #E6F1FB; color: #2E6DA4;  border: 1px solid #B8D6F0; }
+  .status-select.status-listed    { background-color: #FCEFDD; color: #B8721E; border: 1px solid #F2D3A6; }
+  .status-select.status-sold      { background-color: #E7F4EC; color: #3F8560;  border: 1px solid #BFE3CC; }
+  .status-select.status-returned  { background-color: #FBEAEA; color: #C24545;    border: 1px solid #F0C3C3; }
+  .status-select option { background: #FFFFFF; color: var(--text); font-size: .82rem; }
+
+  /* Status badge (グリッドビュー用・非インタラクティブ) */
+  .status-badge {
+    display: inline-block;
+    font-size: .65rem;
+    font-weight: 700;
+    letter-spacing: .05em;
+    padding: 3px 10px;
+    border-radius: 20px;
+    white-space: nowrap;
+  }
+  .status-badge.status-purchased { background-color: #E6F1FB; color: #2E6DA4;  border: 1px solid #B8D6F0; }
+  .status-badge.status-listed    { background-color: #FCEFDD; color: #B8721E; border: 1px solid #F2D3A6; }
+  .status-badge.status-sold      { background-color: #E7F4EC; color: #3F8560;  border: 1px solid #BFE3CC; }
+  .status-badge.status-returned  { background-color: #FBEAEA; color: #C24545;    border: 1px solid #F0C3C3; }
 
   /* Product card */
   .product-card {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 10px;
     margin-bottom: 12px;
     overflow: hidden;
-    transition: border-color .18s;
+    transition: box-shadow .18s, border-color .18s;
+    box-shadow: 0 1px 2px rgba(55,53,47,.04);
   }
-  .product-card:hover { border-color: #3e4570; }
+  .product-card:hover { border-color: var(--border); box-shadow: 0 2px 8px rgba(55,53,47,.08); }
   .product-card.expanded { border-color: var(--accent); }
 
   .pc-header {
@@ -486,20 +622,48 @@
   .empty-state p { font-size: .82rem; line-height: 1.6; }
 
   /* ── Dashboard ── */
+  .kpi-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+  @media (min-width: 480px) {
+    .kpi-row { gap: 10px; }
+  }
+  .dash-split-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  @media (min-width: 640px) {
+    .dash-split-grid { grid-template-columns: 1fr 1fr; }
+  }
   .kpi-card {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 16px 18px;
+    border-radius: 10px;
+    border-top-left-radius: 0;
+    border-top-right-radius: 0;
+    padding: 12px 10px;
     border-top: 3px solid var(--border);
+    box-shadow: 0 1px 2px rgba(55,53,47,.04);
+    min-width: 0;
   }
   .kpi-card.accent  { border-top-color: var(--accent); }
   .kpi-card.green   { border-top-color: var(--green); }
   .kpi-card.red     { border-top-color: var(--red); }
   .kpi-card.blue    { border-top-color: var(--blue); }
-  .kpi-label { font-size: .65rem; color: var(--muted); letter-spacing: .1em; margin-bottom: 6px; }
-  .kpi-value { font-family: 'Oxanium', monospace; font-size: 1.5rem; font-weight: 700; line-height: 1; }
-  .kpi-sub   { font-size: .68rem; color: var(--muted); margin-top: 5px; }
+  .kpi-label { font-size: .62rem; color: var(--muted); letter-spacing: .04em; margin-bottom: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .kpi-value {
+    font-family: 'Oxanium', monospace;
+    font-size: clamp(.95rem, 4.2vw, 1.4rem);
+    font-weight: 700;
+    line-height: 1.15;
+    overflow-wrap: break-word;
+  }
+  .kpi-sub   { font-size: .62rem; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* Ranking table */
   .rank-row {
@@ -533,33 +697,72 @@
   .modal {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 12px;
     padding: 28px;
     max-width: 480px;
     width: 100%;
     max-height: 90vh;
     overflow-y: auto;
+    box-shadow: 0 8px 24px rgba(55,53,47,.12), 0 2px 6px rgba(55,53,47,.08);
   }
   .modal h3 {
-    font-family: 'Oxanium', monospace;
-    letter-spacing: .1em;
+    font-family: 'Noto Sans JP', sans-serif;
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: .01em;
     margin-bottom: 20px;
-    color: var(--accent);
+    color: var(--text);
   }
   .modal .action-row { margin-top: 20px; }
+
+  /* Shipping selector */
+  .ship-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .ship-item:hover { border-color: var(--accent); background: var(--surface2); }
+  .ship-item .si-icon { font-size: 1.1rem; flex-shrink: 0; }
+  .ship-item .si-main { flex: 1; min-width: 0; }
+  .ship-item .si-name { font-size: .84rem; font-weight: 700; color: var(--text); }
+  .ship-item .si-detail { font-size: .68rem; color: var(--muted); margin-top: 2px; line-height: 1.5; }
+  .ship-item .si-price {
+    font-family: 'Oxanium', monospace;
+    font-size: .95rem;
+    font-weight: 700;
+    color: var(--accent2);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .ship-group-label {
+    font-size: .68rem;
+    font-weight: 700;
+    color: var(--muted);
+    letter-spacing: .06em;
+    margin: 10px 0 2px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+  .ship-group-label:first-child { border-top: none; padding-top: 0; margin-top: 0; }
 
   /* Loading overlay */
   #loadingOverlay {
     position: fixed; inset: 0; z-index: 9999;
-    background: #0f1117;
+    background: var(--bg);
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
     gap: 16px;
   }
   .loading-spinner {
     width: 36px; height: 36px;
-    border: 3px solid #2e3350;
-    border-top-color: #f5a623;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }
@@ -568,13 +771,13 @@
     font-family: "Oxanium", monospace;
     font-size: .78rem;
     letter-spacing: .14em;
-    color: #6b7094;
+    color: var(--muted);
   }
 
   /* ── Login screen ── */
   #loginScreen {
     position: fixed; inset: 0; z-index: 9998;
-    background: #0f1117;
+    background: var(--bg);
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
     gap: 24px;
@@ -584,23 +787,24 @@
     font-family: "Oxanium", monospace;
     font-size: 2rem; font-weight: 700;
     letter-spacing: .12em;
-    color: #f5a623;
+    color: var(--accent);
   }
-  .login-logo span { color: #e8eaf0; }
+  .login-logo span { color: var(--text); }
   .login-tagline {
-    font-size: .78rem; color: #6b7094;
+    font-size: .78rem; color: var(--muted);
     letter-spacing: .1em; margin-top: -16px;
   }
   .login-card {
-    background: #1a1d27;
-    border: 1px solid #2e3350;
+    background: var(--surface);
+    border: 1px solid var(--border);
     border-radius: 10px;
     padding: 32px 36px;
     text-align: center;
     max-width: 340px; width: 100%;
+    box-shadow: 0 1px 3px rgba(55,53,47,.04), 0 1px 2px rgba(55,53,47,.06);
   }
   .login-card p {
-    font-size: .82rem; color: #9ba3c4;
+    font-size: .82rem; color: var(--label);
     line-height: 1.7; margin-bottom: 24px;
   }
   .btn-google {
@@ -610,7 +814,7 @@
     font-family: "Noto Sans JP", sans-serif;
     font-size: .88rem; font-weight: 700;
     padding: 12px 20px; border-radius: 6px;
-    border: none; cursor: pointer;
+    border: 1px solid var(--border); cursor: pointer;
     transition: opacity .18s; letter-spacing: .04em;
   }
   .btn-google:hover { opacity: .88; }
@@ -624,11 +828,12 @@
   .user-avatar {
     width: 30px; height: 30px;
     border-radius: 50%;
-    border: 2px solid #2e3350;
+    border: 2px solid var(--border);
     object-fit: cover;
   }
+  .user-avatar[src=""] { display: none; }
   .user-name {
-    font-size: .72rem; color: #9ba3c4;
+    font-size: .72rem; color: var(--label);
     max-width: 120px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
@@ -636,11 +841,29 @@
     font-family: "Noto Sans JP", sans-serif;
     font-size: .68rem; font-weight: 700;
     padding: 4px 10px; border-radius: 4px;
-    border: 1px solid #2e3350;
-    background: transparent; color: #6b7094;
+    border: 1px solid var(--border);
+    background: transparent; color: var(--muted);
     cursor: pointer; transition: all .18s;
   }
-  .btn-logout:hover { border-color: #ff4f4f; color: #ff4f4f; }
+  .btn-logout:hover { border-color: var(--red); color: var(--red); }
+
+  /* DEV mode badge */
+  #devModeBadge {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    background: #FCEFDD;
+    border: 1px solid #f5a623;
+    border-radius: 4px;
+    padding: 3px 10px;
+    font-family: "Oxanium", monospace;
+    font-size: .65rem;
+    font-weight: 700;
+    letter-spacing: .1em;
+    color: #f5a623;
+    margin-left: 12px;
+  }
+  #devModeBadge::before { content: "●"; font-size: .5rem; }
 </style>
 </head>
 <body>
@@ -668,8 +891,9 @@
 <header>
   <div>
     <div class="logo">SEDORI<span>TOOL</span></div>
-    <div class="tagline">せどり管理ツール v0.7</div>
+    <div class="tagline">せどり管理ツール v1.5</div>
   </div>
+  <span id="devModeBadge">DEV MODE</span>
   <div class="user-info">
     <img class="user-avatar" id="userAvatar" src="" alt="">
     <span class="user-name" id="userName"></span>
@@ -678,10 +902,10 @@
 </header>
 
 <nav>
-  <button class="tab-btn active" onclick="switchTab('calc',this)">💰 利益計算</button>
-  <button class="tab-btn" onclick="switchTab('list',this)">📦 商品リスト</button>
-  <button class="tab-btn" onclick="switchTab('search',this)">🔍 相場検索</button>
-  <button class="tab-btn" onclick="switchTab('dash',this)">📊 ダッシュボード</button>
+  <button class="tab-btn active" onclick="switchTab('calc',this)"><span class="tab-icon">💰</span><span class="tab-label">利益計算</span></button>
+  <button class="tab-btn" onclick="switchTab('list',this)"><span class="tab-icon">📦</span><span class="tab-label">商品リスト</span></button>
+  <button class="tab-btn" onclick="switchTab('search',this)"><span class="tab-icon">🔍</span><span class="tab-label">相場検索</span></button>
+  <button class="tab-btn" onclick="switchTab('dash',this)"><span class="tab-icon">📊</span><span class="tab-label">ダッシュボード</span></button>
 </nav>
 
 <!-- ═══════════════════ TAB 1: 利益計算 ═══════════════════ -->
@@ -727,10 +951,14 @@
       </div>
       <div class="field">
         <label>送料（発送コスト）</label>
-        <div class="input-wrap">
-          <input type="number" id="shipping" placeholder="0" min="0" oninput="calc()">
-          <span class="unit">円</span>
+        <div style="display:flex;gap:8px;">
+          <div class="input-wrap" style="flex:1;">
+            <input type="number" id="shipping" placeholder="0" min="0" oninput="calc()">
+            <span class="unit">円</span>
+          </div>
+          <button class="btn-ghost btn-sm" style="flex-shrink:0;white-space:nowrap;" onclick="openShippingModal()">📦 選択</button>
         </div>
+        <div class="hint" id="shippingMethodLabel"></div>
       </div>
       <div class="field">
         <label>その他コスト</label>
@@ -791,6 +1019,10 @@
       <option value="profit_desc">利益 高い順</option>
       <option value="profit_asc">利益 低い順</option>
     </select>
+    <div class="view-toggle">
+      <button class="view-btn active" id="viewBtnList" onclick="setListView('list')" title="リスト表示">☰</button>
+      <button class="view-btn" id="viewBtnGrid" onclick="setListView('grid')" title="グリッド表示">▦</button>
+    </div>
     <span class="list-count" id="listCount"></span>
   </div>
 
@@ -827,7 +1059,7 @@
     <div class="card" style="padding:16px 20px;">
       <div style="font-size:.72rem;color:var(--label);margin-bottom:10px;">調べた相場・気づきを残しておく</div>
       <div style="display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;">
-        <textarea id="searchMemoInput" placeholder="例: メルカリ 中古 8,000〜10,000円 付属品ありは高め" style="flex:1;min-width:180px;min-height:60px;font-size:.82rem;"></textarea>
+        <textarea id="searchMemoInput" placeholder="例: メルカリ 中古 8,000〜10,000円 付属品ありは高め" style="flex:1;min-width:180px;min-height:60px;font-size:16px;"></textarea>
         <button class="btn-primary" style="align-self:flex-end;" onclick="saveSearchMemo()">メモ保存</button>
       </div>
       <div id="searchMemoList" style="margin-top:14px;"></div>
@@ -838,7 +1070,7 @@
     <div class="card" style="padding:16px 20px;">
       <div style="font-size:.72rem;color:var(--label);margin-bottom:10px;">この検索結果を商品リストのアイテムに関連づける</div>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-        <select id="linkTarget" style="flex:1;min-width:180px;font-size:.82rem;padding:8px 10px;">
+        <select id="linkTarget" style="flex:1;min-width:180px;font-size:16px;padding:8px 10px;">
           <option value="">— 商品を選択 —</option>
         </select>
         <button class="btn-ghost" onclick="linkToItem()">紐付ける</button>
@@ -866,7 +1098,7 @@
   </div>
 
   <!-- KPIカード行 -->
-  <div id="kpiRow" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-bottom:24px;"></div>
+  <div id="kpiRow" class="kpi-row"></div>
 
   <!-- 月別利益グラフ -->
   <div class="section-title">月別利益</div>
@@ -876,7 +1108,7 @@
   </div>
 
   <!-- プラットフォーム別 -->
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+  <div class="dash-split-grid">
     <div>
       <div class="section-title">プラットフォーム別</div>
       <div class="card" style="padding:16px 18px;">
@@ -902,6 +1134,24 @@
 </div>
 
 <!-- ═══ Modal: リストに保存 ═══ -->
+<!-- ═══ Modal: 送料選択 ═══ -->
+<div class="modal-overlay" id="shippingModal">
+  <div class="modal" style="max-width:560px;">
+    <h3>📦 送料を選択</h3>
+
+    <div class="preset-row" style="margin-bottom:16px;">
+      <button class="preset-btn active" id="shipPlatBtn-mercari" onclick="setShippingPlatform('mercari')">メルカリ便</button>
+      <button class="preset-btn" id="shipPlatBtn-yahoo" onclick="setShippingPlatform('yahoo')">Yahoo!フリマ</button>
+    </div>
+
+    <div id="shippingList" style="display:flex;flex-direction:column;gap:6px;max-height:60vh;overflow-y:auto;"></div>
+
+    <div class="action-row" style="margin-top:16px;">
+      <button class="btn-ghost" onclick="closeModal('shippingModal')">キャンセル</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="saveModal">
   <div class="modal">
     <h3>📦 商品をリストに保存</h3>
@@ -967,6 +1217,17 @@
           <option value="listed">出品中</option>
           <option value="sold">売却済</option>
           <option value="returned">返品</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>販売プラットフォーム</label>
+        <select id="e_platform">
+          <option value="メルカリ">メルカリ</option>
+          <option value="ヤフオク">ヤフオク</option>
+          <option value="ヤフーフリマ">ヤフーフリマ</option>
+          <option value="Amazon">Amazon</option>
+          <option value="ラクマ">ラクマ</option>
+          <option value="カスタム">カスタム</option>
         </select>
       </div>
 
@@ -1062,6 +1323,129 @@
 // ════════════════════════════════════════════
 //  CONSTANTS & STATE
 // ════════════════════════════════════════════
+// ════════════════════════════════════════════
+//  送料プリセットデータ
+// ════════════════════════════════════════════
+const SHIPPING_DATA = {
+  mercari: {
+    label: 'メルカリ便',
+    groups: [
+      {
+        name: 'らくらくメルカリ便（ヤマト運輸）',
+        items: [
+          { name: 'ネコポス', detail: '3辺合計60cm以内・長辺34cm以内・厚さ3cm以内 / 1kg', price: 210 },
+          { name: '宅急便コンパクト', detail: '専用BOX 20×25×5cm(資材¥70) / 薄型BOX 24.8×34cm', price: 450 },
+          { name: '宅急便 60サイズ', detail: '2kg以内', price: 750 },
+          { name: '宅急便 80サイズ', detail: '5kg以内', price: 850 },
+          { name: '宅急便 100サイズ', detail: '10kg以内', price: 1050 },
+          { name: '宅急便 120サイズ', detail: '15kg以内', price: 1200 },
+          { name: '宅急便 140サイズ', detail: '20kg以内', price: 1450 },
+          { name: '宅急便 160サイズ', detail: '25kg以内', price: 1700 },
+          { name: '宅急便 170サイズ', detail: '30kg以内・営業所/集荷のみ', price: 2100 },
+          { name: '宅急便 180サイズ', detail: '30kg以内・営業所/集荷のみ', price: 2100 },
+          { name: '宅急便 200サイズ', detail: '30kg以内・営業所/集荷のみ', price: 2500 },
+        ]
+      },
+      {
+        name: 'ゆうゆうメルカリ便（日本郵便）',
+        items: [
+          { name: 'ゆうパケットポストmini', detail: '内寸21.1×16.8cm(専用封筒¥20) / 2kg', price: 160 },
+          { name: 'ゆうパケットポスト', detail: '専用シール(¥5) or 専用箱32.7×22.8×3cm(¥65) / 2kg', price: 215 },
+          { name: 'ゆうパケット', detail: '34×23×3cm以内 / 1kg', price: 230 },
+          { name: 'ゆうパケットプラス', detail: '専用箱17×24×7cm(¥65) / 2kg', price: 455 },
+          { name: 'ゆうパック 60サイズ', detail: '25kg以内', price: 750 },
+          { name: 'ゆうパック 80サイズ', detail: '25kg以内', price: 870 },
+          { name: 'ゆうパック 100サイズ', detail: '25kg以内', price: 1070 },
+          { name: 'ゆうパック 120サイズ', detail: '25kg以内', price: 1200 },
+          { name: 'ゆうパック 140サイズ', detail: '25kg以内', price: 1450 },
+          { name: 'ゆうパック 160サイズ', detail: '25kg以内', price: 1700 },
+          { name: 'ゆうパック 170サイズ', detail: '25kg以内', price: 1900 },
+        ]
+      }
+    ]
+  },
+  yahoo: {
+    label: 'Yahoo!フリマ',
+    groups: [
+      {
+        name: '厚さ3〜7cm以下の荷物',
+        items: [
+          { name: 'ゆうパケットポストmini', detail: '専用封筒16.8×21.1cm・郵便ポスト投函可 / 2kg', price: 160 },
+          { name: 'ネコポス', detail: 'A4サイズ・長辺34cm以内・厚さ3cm以内 / 1kg', price: 210 },
+          { name: 'ゆうパケット', detail: 'A4サイズ・長辺34cm以内・厚さ3cm以内 / 1kg', price: 215 },
+          { name: 'ゆうパケットポスト', detail: '専用箱22.8×32.7cm・郵便ポスト投函可 / 2kg', price: 210 },
+          { name: '宅急便コンパクト(EAZY)', detail: '専用箱24.8×34cm or 20×25cm厚5cm', price: 490 },
+          { name: 'ゆうパケットプラス', detail: '専用箱17×24cm厚5cm以内 / 2kg', price: 410 },
+        ]
+      },
+      {
+        name: '3辺合計60cm以上の荷物',
+        items: [
+          { name: '宅急便(EAZY) 60サイズ', detail: '2kg以内', price: 750 },
+          { name: '宅急便(EAZY) 80サイズ', detail: '5kg以内', price: 850 },
+          { name: '宅急便(EAZY) 100サイズ', detail: '10kg以内', price: 1050 },
+          { name: '宅急便(EAZY) 120サイズ', detail: '15kg以内', price: 1200 },
+          { name: '宅急便(EAZY) 140サイズ', detail: '20kg以内', price: 1400 },
+          { name: '宅急便(EAZY) 160サイズ', detail: '25kg以内', price: 1700 },
+          { name: '宅急便(EAZY) 180サイズ', detail: '30kg以内', price: 2100 },
+          { name: '宅急便(EAZY) 200サイズ', detail: '30kg以内', price: 2500 },
+          { name: 'ゆうパック 60サイズ', detail: '25kg以内', price: 750 },
+          { name: 'ゆうパック 80サイズ', detail: '25kg以内', price: 850 },
+          { name: 'ゆうパック 100サイズ', detail: '25kg以内', price: 1050 },
+          { name: 'ゆうパック 120サイズ', detail: '25kg以内', price: 1200 },
+          { name: 'ゆうパック 140サイズ', detail: '25kg以内', price: 1400 },
+          { name: 'ゆうパック 160サイズ', detail: '25kg以内', price: 1700 },
+          { name: 'ゆうパック 170サイズ', detail: '25kg以内', price: 1900 },
+          { name: 'おまかせ配送 80サイズ', detail: '梱包・発送おまかせ / 靴・バッグ・衣類など', price: 1700 },
+          { name: 'おまかせ配送 120サイズ', detail: '梱包・発送おまかせ / 炊飯器・電子レンジなど', price: 2400 },
+          { name: 'おまかせ配送 160サイズ', detail: '梱包・発送おまかせ / チャイルドシートなど', price: 3400 },
+          { name: 'おまかせ配送 200サイズ', detail: '梱包・発送おまかせ / 椅子・座卓など', price: 5000 },
+        ]
+      }
+    ]
+  }
+};
+
+let shippingPlatform = 'mercari';
+
+function openShippingModal() {
+  renderShippingList();
+  document.getElementById('shippingModal').classList.add('open');
+}
+
+function setShippingPlatform(p) {
+  shippingPlatform = p;
+  document.getElementById('shipPlatBtn-mercari').classList.toggle('active', p === 'mercari');
+  document.getElementById('shipPlatBtn-yahoo').classList.toggle('active', p === 'yahoo');
+  renderShippingList();
+}
+
+function renderShippingList() {
+  const data = SHIPPING_DATA[shippingPlatform];
+  const el = document.getElementById('shippingList');
+  el.innerHTML = data.groups.map(group => `
+    <div class="ship-group-label">${esc(group.name)}</div>
+    ${group.items.map(item => `
+      <div class="ship-item" onclick="pickShipping(${item.price}, '${esc(item.name)}', '${data.label}')">
+        <span class="si-icon">📦</span>
+        <div class="si-main">
+          <div class="si-name">${esc(item.name)}</div>
+          <div class="si-detail">${esc(item.detail)}</div>
+        </div>
+        <div class="si-price">¥${item.price.toLocaleString('ja-JP')}</div>
+      </div>
+    `).join('')}
+  `).join('');
+}
+
+function pickShipping(price, name, platformLabel) {
+  document.getElementById('shipping').value = price;
+  document.getElementById('shippingMethodLabel').textContent = `${platformLabel}・${name}を選択中`;
+  calc();
+  closeModal('shippingModal');
+  showToast('✓ 送料を設定しました');
+}
+
 const PRESETS = [
   { name: 'メルカリ',    rate: 10,  fixed: 0 },
   { name: 'ヤフオク',    rate: 8.8, fixed: 0 },
@@ -1145,6 +1529,7 @@ function fmt(v) { return Math.round(v).toLocaleString('ja-JP'); }
 
 function resetCalc() {
   ['cost','price','shipping','misc'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('shippingMethodLabel').textContent = '';
   calc();
 }
 
@@ -1196,6 +1581,15 @@ async function confirmSave() {
 // ════════════════════════════════════════════
 //  TAB 2: LIST
 // ════════════════════════════════════════════
+let listView = 'list'; // 'list' | 'grid'
+
+function setListView(v) {
+  listView = v;
+  document.getElementById('viewBtnList').classList.toggle('active', v === 'list');
+  document.getElementById('viewBtnGrid').classList.toggle('active', v === 'grid');
+  renderList();
+}
+
 async function renderList() {
   const q      = (document.getElementById('listSearch').value || '').toLowerCase();
   const fStat  = document.getElementById('listFilterStatus').value;
@@ -1223,6 +1617,7 @@ async function renderList() {
   document.getElementById('listCount').textContent = list.length + '件';
 
   const container = document.getElementById('listContainer');
+  container.classList.toggle('grid-view', listView === 'grid');
 
   if (list.length === 0) {
     container.innerHTML = `
@@ -1234,8 +1629,16 @@ async function renderList() {
     return;
   }
 
-  container.innerHTML = '';
   const searches = await getSearchHistory();
+
+  if (listView === 'grid') {
+    container.innerHTML = list.map(item => buildGridCard(item)).join('');
+    container.querySelectorAll('.grid-card').forEach(card => {
+      card.addEventListener('click', () => openEditModal(parseInt(card.dataset.id)));
+    });
+    return;
+  }
+
   container.innerHTML = list.map(item => buildProductCard(item, searches)).join('');
 
   // restore expanded state
@@ -1244,6 +1647,24 @@ async function renderList() {
       card.classList.toggle('expanded');
     });
   });
+}
+
+function buildGridCard(item) {
+  const profitCls = (item.profit||0) > 0 ? 'pos' : (item.profit||0) < 0 ? 'neg' : '';
+  const profitStr = ((item.profit||0) >= 0 ? '+' : '') + fmt(item.profit||0) + '円';
+  const st        = item.status || 'purchased';
+  const nameCls   = item.name ? '' : ' unnamed';
+  const nameDisp  = item.name || '（名前未設定）';
+
+  return `
+  <div class="grid-card" data-id="${item.id}">
+    <div class="gc-top">
+      <span class="status-badge status-${st}">${STATUS_LABEL[st]||'—'}</span>
+    </div>
+    <div class="gc-name${nameCls}">${esc(nameDisp)}</div>
+    <div class="gc-meta">${esc(item.platform||'')}${item.store ? ' ・ '+esc(item.store) : ''}</div>
+    <div class="gc-profit ${profitCls}">${profitStr}</div>
+  </div>`;
 }
 
 function buildProductCard(item, searches) {
@@ -1350,6 +1771,14 @@ async function openEditModal(id) {
   document.getElementById('e_id').value          = id;
   document.getElementById('e_name').value        = item.name || '';
   document.getElementById('e_status').value      = item.status || 'purchased';
+  const platSel = document.getElementById('e_platform');
+  const platVal = item.platform || 'メルカリ';
+  if (![...platSel.options].some(o => o.value === platVal)) {
+    const opt = document.createElement('option');
+    opt.value = platVal; opt.textContent = platVal;
+    platSel.appendChild(opt);
+  }
+  platSel.value = platVal;
   document.getElementById('e_cost').value        = item.cost || 0;
   document.getElementById('e_price').value       = item.price || 0;
   document.getElementById('e_shipping').value    = item.shipping || 0;
@@ -1411,6 +1840,7 @@ async function confirmEdit() {
     ...base,
     name,
     status:      document.getElementById('e_status').value,
+    platform:    document.getElementById('e_platform').value,
     cost, price, shipping, misc, feeRate, feeFixed, fee, profit, margin,
     store:       document.getElementById('e_store').value.trim(),
     purchasedAt: document.getElementById('e_purchasedAt').value,
@@ -1622,8 +2052,8 @@ async function renderSearchHistory() {
       onclick="jumpToSearch('${esc(entry.query)}')">
       <span style="font-size:.88rem;font-weight:700;flex:1;min-width:120px;">${esc(entry.query)}</span>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-        ${linkedNames.map(n => `<span style="font-size:.65rem;background:#1a2a4a;color:var(--blue);border:1px solid #2a4a7a;padding:2px 8px;border-radius:20px;">📦 ${n}</span>`).join('')}
-        ${memoCount > 0 ? `<span style="font-size:.65rem;background:#22263a;color:var(--label);border:1px solid var(--border);padding:2px 8px;border-radius:20px;">📝 ${memoCount}件</span>` : ''}
+        ${linkedNames.map(n => `<span style="font-size:.65rem;background:#E6F1FB;color:#2E6DA4;border:1px solid #B8D6F0;padding:2px 8px;border-radius:20px;">📦 ${n}</span>`).join('')}
+        ${memoCount > 0 ? `<span style="font-size:.65rem;background:var(--surface2);color:var(--label);border:1px solid var(--border);padding:2px 8px;border-radius:20px;">📝 ${memoCount}件</span>` : ''}
         <span style="font-size:.65rem;color:var(--muted);">${entry.searchedAt.slice(0,10)}</span>
         <button class="btn-danger btn-sm" style="padding:2px 8px;" onclick="event.stopPropagation();deleteHistory(${entry.id})">×</button>
       </div>
@@ -1659,10 +2089,17 @@ function setRange(range, btn) {
 function filterByRange(list) {
   const now = new Date();
   return list.filter(item => {
-    const d = new Date(item.createdAt);
-    if (dashRange === 'year')  return d.getFullYear() === now.getFullYear();
-    if (dashRange === 'month') return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
-    return true;
+    // 購入日 or 売却日のどちらかが期間内なら対象とする
+    const dates = [item.purchasedAt, item.soldAt]
+      .filter(Boolean)
+      .map(s => new Date(s));
+    if (dates.length === 0) dates.push(new Date(item.createdAt)); // フォールバック
+
+    return dates.some(d => {
+      if (dashRange === 'year')  return d.getFullYear() === now.getFullYear();
+      if (dashRange === 'month') return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+      return true;
+    });
   });
 }
 
@@ -1685,18 +2122,22 @@ async function initDash() {
 function buildKPI(list) {
   const sold     = list.filter(x => x.status === 'sold');
   const active   = list.filter(x => x.status === 'listed' || x.status === 'purchased');
-  const totalProfit  = sold.reduce((s, x) => s + (x.profit||0), 0);
-  const totalCost    = list.reduce((s, x) => s + (x.cost||0), 0);
-  const avgMargin    = sold.length ? sold.reduce((s, x) => s + (x.margin||0), 0) / sold.length : 0;
-  const roi          = totalCost > 0 ? totalProfit / totalCost * 100 : 0;
+
+  const totalRevenue = sold.reduce((s, x) => s + (x.price||0), 0);   // 売上（売却済の売値合計）
+  const totalProfit  = sold.reduce((s, x) => s + (x.profit||0), 0);  // 利益（売却済の純利益合計）
+  const avgMargin    = sold.length ? sold.reduce((s, x) => s + (x.margin||0), 0) / sold.length : 0; // 平均利益率
+
+  const stockCount   = active.length;                                          // 在庫件数
+  const stockValue   = active.reduce((s, x) => s + (x.cost||0), 0);            // 在庫評価額
+  const totalCost    = list.reduce((s, x) => s + (x.cost||0), 0);              // 仕入総額（全体）
 
   const kpis = [
-    { label: '総利益（売却済）', value: (totalProfit >= 0 ? '+' : '') + '¥' + fmt(totalProfit), sub: sold.length + '件売却', cls: totalProfit >= 0 ? 'green' : 'red' },
-    { label: '仕入総額',         value: '¥' + fmt(totalCost),   sub: list.length + '件仕入',     cls: 'accent' },
-    { label: '平均利益率',        value: avgMargin.toFixed(1) + '%', sub: '売却済のみ',            cls: avgMargin >= 20 ? 'green' : 'blue' },
-    { label: 'ROI',              value: roi.toFixed(1) + '%',   sub: '利益 / 仕入総額',           cls: roi >= 30 ? 'green' : roi >= 0 ? 'blue' : 'red' },
-    { label: '在庫中',           value: active.length + '件',   sub: '仕入済 + 出品中',           cls: 'blue' },
-    { label: '在庫評価額',       value: '¥' + fmt(active.reduce((s,x) => s+(x.cost||0),0)), sub: '仕入値合計', cls: 'accent' },
+    { label: '売上',       value: '¥' + fmt(totalRevenue), sub: sold.length + '件売却', cls: 'blue' },
+    { label: '利益',       value: (totalProfit >= 0 ? '+' : '') + '¥' + fmt(totalProfit), sub: sold.length + '件売却', cls: totalProfit >= 0 ? 'green' : 'red' },
+    { label: '利益率',     value: avgMargin.toFixed(1) + '%', sub: '売却済の平均',        cls: avgMargin >= 20 ? 'green' : 'accent' },
+    { label: '在庫件数',   value: stockCount + '件',       sub: '仕入済 + 出品中',       cls: 'blue' },
+    { label: '在庫評価額', value: '¥' + fmt(stockValue),   sub: '在庫の仕入値合計',      cls: 'accent' },
+    { label: '仕入総額',   value: '¥' + fmt(totalCost),    sub: list.length + '件仕入',  cls: 'accent' },
   ];
 
   document.getElementById('kpiRow').innerHTML = kpis.map(k => `
@@ -1720,10 +2161,17 @@ function buildMonthlyChart(list) {
   months.forEach(m => { profitMap[m.key] = 0; costMap[m.key] = 0; });
 
   list.forEach(item => {
-    const d = new Date(item.createdAt);
-    const key = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
-    if (key in costMap) costMap[key] += (item.cost||0);
-    if (item.status === 'sold' && key in profitMap) profitMap[key] += (item.profit||0);
+    // 仕入コストは「購入日」の月に計上（なければcreatedAt）
+    const purchaseDate = item.purchasedAt ? new Date(item.purchasedAt) : new Date(item.createdAt);
+    const purchaseKey  = purchaseDate.getFullYear() + '-' + String(purchaseDate.getMonth()+1).padStart(2,'0');
+    if (purchaseKey in costMap) costMap[purchaseKey] += (item.cost||0);
+
+    // 利益は「売却日」の月に計上（なければ集計しない）
+    if (item.status === 'sold') {
+      const soldDate = item.soldAt ? new Date(item.soldAt) : new Date(item.updatedAt || item.createdAt);
+      const soldKey   = soldDate.getFullYear() + '-' + String(soldDate.getMonth()+1).padStart(2,'0');
+      if (soldKey in profitMap) profitMap[soldKey] += (item.profit||0);
+    }
   });
 
   const profits = months.map(m => profitMap[m.key]);
@@ -1744,7 +2192,7 @@ function buildMonthlyChart(list) {
         {
           label: '利益',
           data: profits,
-          backgroundColor: profits.map(v => v >= 0 ? 'rgba(61,220,132,0.7)' : 'rgba(255,79,79,0.7)'),
+          backgroundColor: profits.map(v => v >= 0 ? 'rgba(74,155,110,0.75)' : 'rgba(214,86,86,0.75)'),
           borderRadius: 3,
           order: 1,
         },
@@ -1752,9 +2200,9 @@ function buildMonthlyChart(list) {
           label: '仕入額',
           data: costs,
           type: 'line',
-          borderColor: 'rgba(245,166,35,0.8)',
+          borderColor: 'rgba(232,130,60,0.85)',
           backgroundColor: 'transparent',
-          pointBackgroundColor: 'rgba(245,166,35,1)',
+          pointBackgroundColor: 'rgba(232,130,60,1)',
           pointRadius: 3,
           tension: 0.3,
           borderWidth: 2,
@@ -1764,8 +2212,10 @@ function buildMonthlyChart(list) {
     },
     options: {
       responsive: true,
+      maintainAspectRatio: true,
+      aspectRatio: 1.6,
       plugins: {
-        legend: { labels: { color: '#9ba3c4', font: { size: 11 } } },
+        legend: { labels: { color: '#6B685F', font: { size: 11 } } },
         tooltip: {
           callbacks: {
             label: ctx => ' ¥' + fmt(ctx.raw)
@@ -1773,8 +2223,8 @@ function buildMonthlyChart(list) {
         }
       },
       scales: {
-        x: { ticks: { color: '#6b7094', font: { size: 10 } }, grid: { color: '#2e3350' } },
-        y: { ticks: { color: '#6b7094', font: { size: 10 }, callback: v => '¥' + fmt(v) }, grid: { color: '#2e3350' } }
+        x: { ticks: { color: '#9B978D', font: { size: 10 } }, grid: { color: '#E3E0D9' } },
+        y: { ticks: { color: '#9B978D', font: { size: 10 }, callback: v => '¥' + fmt(v) }, grid: { color: '#E3E0D9' } }
       }
     }
   });
@@ -1790,7 +2240,7 @@ function buildPlatformChart(list) {
   document.getElementById('platformChart').style.display = keys.length ? 'block' : 'none';
   if (!keys.length) return;
 
-  const colors = ['#f5a623','#3ddc84','#4fa8e8','#e05c2a','#a78bfa','#f472b6'];
+  const colors = ['#E8823C','#4A9B6E','#4A85C9','#C96A2E','#9B7FE0','#E077A8'];
   if (chartPlatform) chartPlatform.destroy();
   chartPlatform = new Chart(document.getElementById('platformChart'), {
     type: 'doughnut',
@@ -1799,8 +2249,11 @@ function buildPlatformChart(list) {
       datasets: [{ data: keys.map(k => map[k]), backgroundColor: keys.map((_,i) => colors[i % colors.length]), borderWidth: 0 }]
     },
     options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      aspectRatio: 1.3,
       plugins: {
-        legend: { position: 'bottom', labels: { color: '#9ba3c4', font: { size: 10 }, padding: 10 } },
+        legend: { position: 'bottom', labels: { color: '#6B685F', font: { size: 10 }, padding: 10 } },
         tooltip: { callbacks: { label: ctx => ' ¥' + fmt(ctx.raw) } }
       }
     }
@@ -1817,7 +2270,7 @@ function buildStatusChart(list) {
   document.getElementById('statusChart').style.display = keys.length ? 'block' : 'none';
   if (!keys.length) return;
 
-  const colorMap = { purchased:'#4fa8e8', listed:'#f5a623', sold:'#3ddc84', returned:'#ff4f4f' };
+  const colorMap = { purchased:'#4A85C9', listed:'#E8823C', sold:'#4A9B6E', returned:'#D65656' };
   if (chartStatus) chartStatus.destroy();
   chartStatus = new Chart(document.getElementById('statusChart'), {
     type: 'doughnut',
@@ -1826,8 +2279,11 @@ function buildStatusChart(list) {
       datasets: [{ data: keys.map(k => map[k]), backgroundColor: keys.map(k => colorMap[k]), borderWidth: 0 }]
     },
     options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      aspectRatio: 1.3,
       plugins: {
-        legend: { position: 'bottom', labels: { color: '#9ba3c4', font: { size: 10 }, padding: 10 } },
+        legend: { position: 'bottom', labels: { color: '#6B685F', font: { size: 10 }, padding: 10 } },
         tooltip: { callbacks: { label: ctx => ' ' + ctx.raw + '件' } }
       }
     }
