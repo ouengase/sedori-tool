@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>せどり管理ツール</title>
+<title>せどり管理ツール v2.0</title>
 <link href="https://fonts.googleapis.com/css2?family=Oxanium:wght@400;600;700&family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
@@ -1007,7 +1007,7 @@ window.DEV_MODE = DEV_MODE;
 <header>
   <div>
     <div class="logo">SEDORI<span>TOOL</span></div>
-    <div class="tagline">せどり管理ツール v1.9</div>
+    <div class="tagline">せどり管理ツール v2.0</div>
   </div>
   <span id="devModeBadge">DEV MODE</span>
   <div class="user-info">
@@ -2306,6 +2306,15 @@ function filterByRange(list) {
   });
 }
 
+// 「仕入れ日」が選択中の期間内にあるかどうかだけを判定（仕入総額の集計専用）
+function isPurchasedInRange(item) {
+  const now = new Date();
+  const d = item.purchasedAt ? new Date(item.purchasedAt) : new Date(item.createdAt);
+  if (dashRange === 'year')  return d.getFullYear() === now.getFullYear();
+  if (dashRange === 'month') return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  return true; // 'all'
+}
+
 async function initDash() {
   const raw  = await getList();
   const list = filterByRange(raw);
@@ -2327,8 +2336,9 @@ let lastKpiList = []; // KPI詳細モーダル用に直近のフィルタ済み�
 function buildKPI(list) {
   lastKpiList = list;
 
-  const sold      = list.filter(x => x.status === 'sold');
-  const active    = list.filter(x => x.status === 'listed' || x.status === 'purchased');
+  const sold        = list.filter(x => x.status === 'sold');
+  const active      = list.filter(x => x.status === 'listed' || x.status === 'purchased');
+  const purchasedIn = list.filter(x => isPurchasedInRange(x)); // 仕入れ日が期間内の商品のみ
 
   const totalRevenue = sold.reduce((s, x) => s + (x.price||0), 0);   // 売上（売却済の売値合計）
   const totalProfit  = sold.reduce((s, x) => s + (x.profit||0), 0);  // 利益（売却済の純利益合計）
@@ -2336,7 +2346,7 @@ function buildKPI(list) {
 
   const stockCount   = active.length;                                              // 在庫件数
   const stockValue   = active.reduce((s, x) => s + (x.profit||0), 0);              // 在庫評価額（仕入済+出品中の想定利益合計）
-  const totalCost    = list.reduce((s, x) => s + (x.cost||0), 0);                  // 仕入総額（全体）
+  const totalCost    = purchasedIn.reduce((s, x) => s + (x.cost||0), 0);           // 仕入総額（仕入れ日が期間内のもののみ）
 
   const kpis = [
     { key: 'revenue',    label: '売上',       value: '¥' + fmt(totalRevenue), sub: sold.length + '件売却', cls: 'blue' },
@@ -2344,7 +2354,7 @@ function buildKPI(list) {
     { key: 'margin',     label: '利益率',     value: avgMargin.toFixed(1) + '%', sub: '売却済の平均',        cls: avgMargin >= 20 ? 'green' : 'accent' },
     { key: 'stockCount', label: '在庫件数',   value: stockCount + '件',       sub: '仕入済 + 出品中',       cls: 'blue' },
     { key: 'stockValue', label: '在庫評価額', value: (stockValue >= 0 ? '+' : '') + '¥' + fmt(stockValue), sub: '仕入済+出品中の想定利益合計', cls: stockValue >= 0 ? 'green' : 'red' },
-    { key: 'totalCost',  label: '仕入総額',   value: '¥' + fmt(totalCost),    sub: list.length + '件仕入',  cls: 'accent' },
+    { key: 'totalCost',  label: '仕入総額',   value: '¥' + fmt(totalCost),    sub: purchasedIn.length + '件仕入', cls: 'accent' },
   ];
 
   document.getElementById('kpiRow').innerHTML = kpis.map(k => `
@@ -2357,9 +2367,10 @@ function buildKPI(list) {
 
 // ── KPI詳細モーダル ──
 function openKpiDetail(key) {
-  const list   = lastKpiList;
-  const sold   = list.filter(x => x.status === 'sold');
-  const active = list.filter(x => x.status === 'listed' || x.status === 'purchased');
+  const list        = lastKpiList;
+  const sold        = list.filter(x => x.status === 'sold');
+  const active      = list.filter(x => x.status === 'listed' || x.status === 'purchased');
+  const purchasedIn = list.filter(x => isPurchasedInRange(x)); // 仕入れ日が期間内の商品のみ
 
   let title = '', rows = [], targetList = [], sumLabel = '', sumValue = 0, formula = '';
 
@@ -2404,10 +2415,10 @@ function openKpiDetail(key) {
     formula = 'ステータスが「仕入済」または「出品中」の商品の「想定利益（利益計算タブで算出した純利益）」の合計';
   } else if (key === 'totalCost') {
     title = '🧾 仕入総額の内訳';
-    targetList = list;
-    sumValue = list.reduce((s,x) => s + (x.cost||0), 0);
+    targetList = purchasedIn;
+    sumValue = purchasedIn.reduce((s,x) => s + (x.cost||0), 0);
     sumLabel = '仕入総額';
-    formula = 'この期間に登録された全商品の「仕入値」の合計（ステータス問わず）';
+    formula = '「仕入れ日」がこの期間内にある商品の「仕入値」の合計（ステータス問わず）';
   }
 
   document.getElementById('kpiDetailTitle').textContent = title;
